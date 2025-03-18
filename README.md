@@ -1,1 +1,1 @@
-# BavariaWindCast
+# GermanyWindCast
