@@ -6,13 +6,8 @@ import logging
 import requests
 import zipfile
 import pandas as pd
+import utils.constants as c
 from bs4 import BeautifulSoup
-
-"""
-This script is responsible for downloading the raw data from DWD and building a single complete
-dataset that later can be used for training, evaluating and testing differen models. 
-Along this datset a CSV-file containing metadata for each station is created.
-"""
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -249,15 +244,20 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
         combined_df["id"] = combined_df["id"].astype(str).str.zfill(5)
         combined_df = combined_df[combined_df["id"].isin(station_ids)]
 
-        group_cols = [col for col in combined_df.columns if col not in ["valid_from", "valid_until"]]
+        group_cols = [
+            col
+            for col in combined_df.columns
+            if col not in ["valid_from", "valid_until"]
+        ]
 
         # if metadata does not change we can merge the entries together
         merged_df = combined_df.groupby(group_cols, as_index=False).agg(
-            valid_from = ("valid_from", "min"),
-            valid_until = ("valid_until", "max")
+            valid_from=("valid_from", "min"), valid_until=("valid_until", "max")
         )
-        
-        most_recent_merged_df = merged_df.sort_values("valid_from").groupby("id").tail(1)
+
+        most_recent_merged_df = (
+            merged_df.sort_values("valid_from").groupby("id").tail(1)
+        )
 
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
@@ -377,44 +377,28 @@ def main():
     temperature_download_dir = os.path.join("data", "downloads", "air_temperature")
     metadata_output_path = os.path.join("data", "raw", "station_metadata.csv")
     dataset_output_path = os.path.join("data", "raw", "complete_dataset.csv")
-    station_ids = [
-        "03897",
-        "06163",
-        "05516",
-        "05930",
-        "06097",
-        "04271",
-        "00183",
-        "01759",
-        "03032",
-        "04393",
-        "00788",
-        "02429",
-        "04625",
-        "00591",
-        "01694",
-    ]
+
     max_end_date = pd.to_datetime("2023-12-31")
 
     os.makedirs(meta_download_dir, exist_ok=True)
     meta_zip_links = [
         f"{meta_url}Meta_Daten_zehn_min_ff_{station_id}.zip"
-        for station_id in station_ids
+        for station_id in c.STATION_IDS
     ]
     for url in meta_zip_links:
         download_zip_file(url, meta_download_dir)
 
     logging.info("Building station metadata dataset...")
     build_metadata_dataset(
-        meta_download_dir, station_ids, metadata_output_path, max_end_date
+        meta_download_dir, c.STATION_IDS, metadata_output_path, max_end_date
     )
 
     os.makedirs(wind_download_dir, exist_ok=True)
     os.makedirs(temperature_download_dir, exist_ok=True)
 
-    wind_zip_links = get_zip_links(wind_url, station_ids, product_code="wind")
+    wind_zip_links = get_zip_links(wind_url, c.STATION_IDS, product_code="wind")
     temperature_zip_links = get_zip_links(
-        temperature_url, station_ids, product_code="TU"
+        temperature_url, c.STATION_IDS, product_code="TU"
     )
 
     for url in wind_zip_links:
@@ -427,7 +411,7 @@ def main():
         temperature_download_dir,
         dataset_output_path,
         metadata_output_path,
-        station_ids,
+        c.STATION_IDS,
     )
 
     insertNaNs(dataset_output_path)

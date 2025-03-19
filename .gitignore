@@ -1,5 +1,4 @@
 /data/downloads/
 *.egg-info/
+
 __pycache__/
-*.pyc
-*.pyo
