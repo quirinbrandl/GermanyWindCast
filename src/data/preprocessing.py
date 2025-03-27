@@ -258,9 +258,9 @@ def main():
         output_dir = Path(f"data/processed/{resolution}res")
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        train.to_csv(output_dir / "train")
-        val.to_csv(output_dir / "eval")
-        test.to_csv(output_dir / "test")
+        train.to_csv(output_dir / "train.csv")
+        val.to_csv(output_dir / "eval.csv")
+        test.to_csv(output_dir / "test.csv")
 
     print("Preprocessing completed. Datasets saved to data/processed/")
 
