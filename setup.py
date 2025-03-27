@@ -15,6 +15,9 @@ setup(
         'matplotlib',
         'windrose',
         'geopandas',
+        'requests',
+        'bs4',
+        'scikit-learn'
     ],
     python_requires='>=3.6',
 )

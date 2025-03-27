@@ -9,23 +9,12 @@ import pandas as pd
 import utils.constants as c
 from bs4 import BeautifulSoup
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def get_zip_links(url, station_ids, product_code):
-    """
-    Scrape the given URL for zip file links matching the product code and station IDs.
-
-    Parameters:
-        url (str): The URL of the DWD directory.
-        station_ids (list of str): The list of station IDs to include.
-        product_code (str): The product code ('wind' or 'TU').
-
-    Returns:
-        list: A list of full URLs to zip files that match.
-    """
+    """Scrape the given URL for zip file links matching the product code and station IDs."""
+    
     logging.info(f"Fetching zip file links from {url} for product '{product_code}'")
     try:
         response = requests.get(url)
@@ -50,16 +39,8 @@ def get_zip_links(url, station_ids, product_code):
 
 
 def download_zip_file(url, save_dir):
-    """
-    Download a zip file from a URL if it does not exist already.
+    """Download a zip file from a URL if it does not exist already."""
 
-    Parameters:
-        url (str): URL to the zip file.
-        save_dir (str): Directory to save the downloaded file.
-
-    Returns:
-        str or None: Local file path of the downloaded zip file, or None if download failed.
-    """
     os.makedirs(save_dir, exist_ok=True)
     local_filename = os.path.join(save_dir, url.split("/")[-1])
     if os.path.exists(local_filename):
@@ -80,16 +61,8 @@ def download_zip_file(url, save_dir):
 
 
 def process_zip_file(zip_file_path, product):
-    """
-    Extract and process a zip file. Reads the .txt file inside and renames columns.
+    """Extract and process a zip file. Reads the .txt file inside and renames columns."""
 
-    Parameters:
-        zip_file_path (str): Local path to the zip file.
-        product (str): 'wind' for wind data or 'TU' for temperature data.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the relevant data.
-    """
     df_list = []
     with zipfile.ZipFile(zip_file_path, "r") as z:
         for filename in z.namelist():
@@ -105,9 +78,7 @@ def process_zip_file(zip_file_path, product):
                                 "DD_10": "wind_direction",
                             }
                         )
-                        df = df[
-                            ["station_id", "datetime", "wind_speed", "wind_direction"]
-                        ]
+                        df = df[["station_id", "datetime", "wind_speed", "wind_direction"]]
                     elif product == "TU":
                         df = pd.read_csv(f, sep=";", encoding="latin1")
                         df = df.rename(
@@ -138,20 +109,11 @@ def process_zip_file(zip_file_path, product):
 
 
 def process_meta_zip_file(zip_file_path):
-    """
-    Extracts and processes metadata from a zip file.
+    """Extracts and processes metadata from a zip file."""
 
-    Parameters:
-        zip_file_path (str): Local path to the zip file.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the relevant metadata.
-    """
     with zipfile.ZipFile(zip_file_path, "r") as z:
         for filename in z.namelist():
-            if filename.startswith("Metadaten_Geographie_") and filename.endswith(
-                ".txt"
-            ):
+            if filename.startswith("Metadaten_Geographie_") and filename.endswith(".txt"):
                 with z.open(filename) as f:
                     df = pd.read_csv(f, sep=";", encoding="latin1")
                     df = df.rename(
@@ -170,35 +132,24 @@ def process_meta_zip_file(zip_file_path):
 
 
 def filter_stations(df, station_ids):
-    """
-    Filter the DataFrame to only include rows for the specified station IDs.
+    """Filter the DataFrame to only include rows for the specified station IDs."""
 
-    Parameters:
-        df (pd.DataFrame): The DataFrame to filter.
-        station_ids (list of str): List of station IDs.
-
-    Returns:
-        pd.DataFrame: Filtered DataFrame.
-    """
     df["station_id"] = df["station_id"].astype(str).str.zfill(5)
     return df[df["station_id"].isin(station_ids)]
 
 
 def load_and_process(product, download_folder, station_ids):
-    """
-    Load and process all zip files for a given product from a folder.
+    """Load and process all zip files for the station_ids for a given product from a folder."""
 
-    Parameters:
-        product (str): 'wind' or 'TU'.
-        download_folder (str): Folder containing downloaded zip files.
-        station_ids (list of str): List of station IDs to filter.
-
-    Returns:
-        pd.DataFrame: Concatenated DataFrame for the product.
-    """
     all_zip_files = glob.glob(os.path.join(download_folder, "*.zip"))
+    zip_files_for_stations = [
+        file
+        for file in all_zip_files
+        if any(f"_{station_id}_" in os.path.basename(file) for station_id in station_ids)
+    ]
+
     df_list = []
-    for file in all_zip_files:
+    for file in zip_files_for_stations:
         logging.info(f"Processing file: {file}")
         df = process_zip_file(file, product)
         if not df.empty:
@@ -211,18 +162,17 @@ def load_and_process(product, download_folder, station_ids):
 
 
 def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_date):
-    """
-    Combines the most recent metadata for each station and saves as a CSV.
+    """Combines the most recent metadata for each station and saves as a CSV."""
 
-    Parameters:
-        meta_download_dir (str): Directory containing downloaded metadata zip files.
-        station_ids (list of str): List of station IDs to include.
-        output_path (str): Path where the metadata CSV file will be saved.
-        max_end_date (datetime): Maximum end date to use for stations with no end date.
-    """
     all_zip_files = glob.glob(os.path.join(meta_download_dir, "*.zip"))
+    zip_files_for_stations = [
+        file
+        for file in all_zip_files
+        if any(f"_{station_id}" in os.path.basename(file) for station_id in station_ids)
+    ]
+
     meta_df_list = []
-    for file in all_zip_files:
+    for file in zip_files_for_stations:
         logging.info(f"Processing metadata file: {file}")
         df = process_meta_zip_file(file)
         if not df.empty:
@@ -245,9 +195,7 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
         combined_df = combined_df[combined_df["id"].isin(station_ids)]
 
         group_cols = [
-            col
-            for col in combined_df.columns
-            if col not in ["valid_from", "valid_until"]
+            col for col in combined_df.columns if col not in ["valid_from", "valid_until"]
         ]
 
         # if metadata does not change we can merge the entries together
@@ -255,9 +203,7 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
             valid_from=("valid_from", "min"), valid_until=("valid_until", "max")
         )
 
-        most_recent_merged_df = (
-            merged_df.sort_values("valid_from").groupby("id").tail(1)
-        )
+        most_recent_merged_df = merged_df.sort_values("valid_from").groupby("id").tail(1)
 
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
@@ -266,29 +212,15 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
 
 
 def get_starting_and_end_date(metadata_output_path):
-    """
-    Extracts the common time range for all stations based on metadata file.
+    """Extracts the common time range for all stations based on metadata file."""
 
-    Parameters:
-        metadata_output_path (str): Path to the metadata CSV file.
-
-    Returns:
-        tuple: A tuple containing (latest_starting_date, earliest_end_date)
-    """
     metadata_df = pd.read_csv(metadata_output_path)
 
-    metadata_df["valid_from"] = pd.to_datetime(
-        metadata_df["valid_from"], errors="coerce"
-    )
-    metadata_df["valid_until"] = pd.to_datetime(
-        metadata_df["valid_until"], errors="coerce"
-    )
+    metadata_df["valid_from"] = pd.to_datetime(metadata_df["valid_from"], errors="coerce")
+    metadata_df["valid_until"] = pd.to_datetime(metadata_df["valid_until"], errors="coerce")
 
     latest_starting_date = metadata_df["valid_from"].max()
     earliest_end_date = metadata_df["valid_until"].min()
-
-    logging.info(f"Calculated the starting date: '{latest_starting_date}'")
-    logging.info(f"Calculated the end date: '{earliest_end_date}'")
 
     return (latest_starting_date, earliest_end_date)
 
@@ -300,34 +232,25 @@ def build_complete_dataset(
     metadata_output_path,
     station_ids,
 ):
-    """
-    Builds a complete dataset by merging wind and temperature data and applying time filtering.
+    """Builds a complete dataset by merging wind and temperature data and applying time filtering."""
 
-    Parameters:
-        wind_download_dir (str): Directory containing downloaded wind data zip files.
-        temperature_download_dir (str): Directory containing downloaded temperature data zip files.
-        dataset_output_path (str): Path where the complete dataset CSV will be saved.
-        metadata_output_path (str): Path to the metadata CSV file.
-        station_ids (list of str): List of station IDs to include.
-    """
     logging.info("Loading wind data...")
     wind_df = load_and_process("wind", wind_download_dir, station_ids)
     logging.info("Loading temperature data...")
     temperature_df = load_and_process("TU", temperature_download_dir, station_ids)
 
     for df in [wind_df, temperature_df]:
-        df["datetime"] = pd.to_datetime(
-            df["datetime"], format="%Y%m%d%H%M", errors="coerce"
-        )
+        df["datetime"] = pd.to_datetime(df["datetime"], format="%Y%m%d%H%M", errors="coerce")
 
-    merged_df = pd.merge(
-        wind_df, temperature_df, on=["station_id", "datetime"], how="outer"
-    )
+    merged_df = pd.merge(wind_df, temperature_df, on=["station_id", "datetime"], how="outer")
     merged_df.sort_values(by=["station_id", "datetime"], inplace=True)
 
     (start_date, end_date) = get_starting_and_end_date(metadata_output_path)
-    mask = (merged_df["datetime"] >= start_date) & (merged_df["datetime"] <= end_date)
-    merged_df = merged_df.loc[mask]
+    station_validity_mask = (merged_df["datetime"] >= start_date) & (
+        merged_df["datetime"] <= end_date
+    )
+
+    merged_df = merged_df.loc[station_validity_mask]
 
     pivot_df = merged_df.pivot_table(
         index="datetime",
@@ -343,9 +266,7 @@ def build_complete_dataset(
         aggfunc="first",
     )
 
-    pivot_df.columns = [
-        f"{measurement}_{station}" for measurement, station in pivot_df.columns
-    ]
+    pivot_df.columns = [f"{measurement}_{station}" for measurement, station in pivot_df.columns]
     pivot_df.reset_index(inplace=True)
 
     output_dir = os.path.dirname(dataset_output_path)
@@ -355,13 +276,7 @@ def build_complete_dataset(
 
 
 def insertNaNs(output_path):
-    """
-    Inserts NaNs for values that equal -999.0.
-    This is the standard value for missing values as it is descrbied by the DWD.
-
-    Parameters:
-        output_path (str): Path were the complete dataset is stored.
-    """
+    """Inserts NaNs for values that equal -999.0 (standard described by the DWD)."""
 
     df = pd.read_csv(output_path)
     df.replace(-999.0, np.nan, inplace=True)
@@ -369,6 +284,7 @@ def insertNaNs(output_path):
 
 
 def main():
+
     meta_url = "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/10_minutes/wind/meta_data/"
     meta_download_dir = os.path.join("data", "downloads", "meta_data")
     wind_url = "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/10_minutes/wind/historical/"
@@ -382,24 +298,19 @@ def main():
 
     os.makedirs(meta_download_dir, exist_ok=True)
     meta_zip_links = [
-        f"{meta_url}Meta_Daten_zehn_min_ff_{station_id}.zip"
-        for station_id in c.STATION_IDS
+        f"{meta_url}Meta_Daten_zehn_min_ff_{station_id}.zip" for station_id in c.STATION_IDS
     ]
     for url in meta_zip_links:
         download_zip_file(url, meta_download_dir)
 
     logging.info("Building station metadata dataset...")
-    build_metadata_dataset(
-        meta_download_dir, c.STATION_IDS, metadata_output_path, max_end_date
-    )
+    build_metadata_dataset(meta_download_dir, c.STATION_IDS, metadata_output_path, max_end_date)
 
     os.makedirs(wind_download_dir, exist_ok=True)
     os.makedirs(temperature_download_dir, exist_ok=True)
 
     wind_zip_links = get_zip_links(wind_url, c.STATION_IDS, product_code="wind")
-    temperature_zip_links = get_zip_links(
-        temperature_url, c.STATION_IDS, product_code="TU"
-    )
+    temperature_zip_links = get_zip_links(temperature_url, c.STATION_IDS, product_code="TU")
 
     for url in wind_zip_links:
         download_zip_file(url, wind_download_dir)
