@@ -77,6 +77,7 @@ def get_openmeteo_data(df_metadata, start_date, end_date):
 
         return openmeteo_df
     else:
+        print(response)
         raise Exception(f"Error when accessing OpenMeteo's API: {response.json()}")
 
 
