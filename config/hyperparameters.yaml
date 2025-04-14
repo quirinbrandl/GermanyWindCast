@@ -1,0 +1,23 @@
+# Architecture config
+hidden_size: 128
+model_architecture: mlp
+num_hidden_layers: 3
+dropout_rate: 0.0
+
+# Spatial config
+station_ids:
+- 03897
+
+# Temporal config
+resolution: 1h
+look_back_hours: 12
+
+# Feature selection
+global_features:
+- hour_sin
+- hour_cos
+- day_sin
+- day_cos
+
+station_features:
+- wind_speed

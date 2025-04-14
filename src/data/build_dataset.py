@@ -189,7 +189,7 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
         )
 
         # empty values mean there is currently no restriction to what end the station is valid
-        combined_df["valid_until"].fillna(max_end_date, inplace=True)
+        combined_df["valid_until"] = combined_df["valid_until"].fillna(max_end_date)
 
         combined_df["id"] = combined_df["id"].astype(str).str.zfill(5)
         combined_df = combined_df[combined_df["id"].isin(station_ids)]

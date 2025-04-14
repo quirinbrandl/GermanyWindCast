@@ -1,0 +1,11 @@
+numpy
+pandas
+matplotlib
+windrose
+geopandas
+requests
+bs4
+scikit-learn
+wandb
+torch
+torchinfo

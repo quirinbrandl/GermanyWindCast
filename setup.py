@@ -17,7 +17,10 @@ setup(
         'geopandas',
         'requests',
         'bs4',
-        'scikit-learn'
+        'scikit-learn',
+        'wandb',
+        'torch',
+        'torchinfo'
     ],
     python_requires='>=3.6',
 )

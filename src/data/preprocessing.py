@@ -4,6 +4,7 @@ import requests
 from pathlib import Path
 import utils.constants as c
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+import joblib
 
 OPEN_METEO_COL_NAME_TO_DATASET_COL_NAME_MAPPING = {
     "temperature_2m": "air_temperature",
@@ -162,48 +163,43 @@ def add_temporal_features(df):
     return df_temporal
 
 
-def build_wind_vector(df):
-    """Transform the wind_speed and wind_direction columns to wind_speed_x and wind_speed_y."""
+def transform_wind_direction(df):
+    """Transform wind direction into sine and cosine features."""
 
     df_wind_vec = df.copy()
 
     for station_id in c.STATION_IDS:
-        speed_col = f"wind_speed_{station_id}"
         direction_col = f"wind_direction_{station_id}"
-
         direction_rads = np.deg2rad(df[direction_col])
 
-        df_wind_vec[f"wind_speed_x_{station_id}"] = df[speed_col] * np.cos(direction_rads)
-        df_wind_vec[f"wind_speed_y_{station_id}"] = df[speed_col] * np.sin(direction_rads)
+        df_wind_vec[f"wind_direction_sin_{station_id}"] = np.sin(direction_rads)
+        df_wind_vec[f"wind_direction_cos_{station_id}"] = np.cos(direction_rads)
 
-        df_wind_vec.drop(columns=[speed_col, direction_col], inplace=True)
+        df_wind_vec.drop(columns=[direction_col], inplace=True)
 
     return df_wind_vec
 
 
-def scale_features(df):
+def scale_features(df, scaler_dict=None):
     """Scale the features in the given df."""
 
-    scaler_std = StandardScaler()
-    scaler_min_max = MinMaxScaler()
-
-    column_to_scaler = {
-        "wind_speed_x": scaler_std,
-        "wind_speed_y": scaler_std,
-        "air_temperature": scaler_std,
-        "air_pressure": scaler_std,
-        "dew_point": scaler_std,
-        "relative_humidity": scaler_min_max,
-    }
+    if scaler_dict == None:
+        scaler_dict = {
+            "wind_speed": StandardScaler(),
+            "air_temperature": StandardScaler(),
+            "air_pressure": StandardScaler(),
+            "dew_point": StandardScaler(),
+            "relative_humidity": MinMaxScaler(),
+        }
 
     for col in df.columns:
         col_base_name = col[:-6]
 
-        if col_base_name in column_to_scaler.keys():
-            scaler = column_to_scaler[col_base_name]
-            df[col] = scaler.fit_transform(df[col].values.reshape(-1, 1))
+        if col_base_name in scaler_dict.keys():
+            scaler = scaler_dict[col_base_name]
+            df.loc[:, col] = scaler.fit_transform(df[col].values.reshape(-1, 1))
 
-    return df
+    return df, scaler_dict
 
 
 def split_dataset(df):
@@ -245,16 +241,21 @@ def main():
     print("Create different time resolution datasets...")
     datasets = build_different_time_res(cut_df)
 
-    print("Add temporal features, build wind vector and scale features for all datasets...")
+    print(
+        "Add temporal features, scale features, perform train/val/test splitting for all datasets..."
+    )
 
     for resolution in datasets:
         dataset = datasets[resolution]
 
         dataset = add_temporal_features(dataset)
-        dataset = build_wind_vector(dataset)
-        dataset = scale_features(dataset)
+        dataset = transform_wind_direction(dataset)
 
         train, val, test = split_dataset(dataset)
+
+        train, scalers = scale_features(train)
+        val, _ = scale_features(val, scaler_dict=scalers)
+        test, _ = scale_features(test, scaler_dict=scalers)
 
         output_dir = Path(f"data/processed/{resolution}res")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +263,8 @@ def main():
         train.to_csv(output_dir / "train.csv")
         val.to_csv(output_dir / "eval.csv")
         test.to_csv(output_dir / "test.csv")
+
+        joblib.dump(scalers, Path(output_dir / "scalers.pkl"))
 
     print("Preprocessing completed. Datasets saved to data/processed/")
 
