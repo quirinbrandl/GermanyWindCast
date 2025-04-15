@@ -1,4 +1,4 @@
-device: cpu
+device: cuda
 use_wandb: true
 wandb_project: wind_forecasting
 batch_size: 128
