@@ -4,40 +4,40 @@ import yaml
 import torch
 
 
-def load_hyperparameters(config_dir=Path("config")):
+def load_hyperparameters(run_id=None, forecasting_hours=1):
+    config_dir = Path("config") if run_id is None else Path(f"runs/{forecasting_hours}_hour_forecasting/{run_id}")
     with open(config_dir / "hyperparameters.yaml", "r") as f:
         hyperparameters = yaml.safe_load(f)
 
     return hyperparameters
 
 
-def create_model(hyperparameters, general_config):
+def create_model(hyperparameters, forecasting_horizon_hours):
     model_architecture = hyperparameters["model_architecture"]
-    forecasting_horizon_hours = general_config["forecasting_hours"]
 
     if model_architecture == "persistence":
         return PersistenceModel(forecasting_horizon_hours, 0, 0)
     elif model_architecture == "mlp":
         return MLP(
-            hyperparameters["look_back_hours"],
-            forecasting_horizon_hours,
-            hyperparameters["station_ids"],
-            hyperparameters["station_features"],
-            hyperparameters["global_features"],
-            hyperparameters["num_hidden_layers"],
-            hyperparameters["hidden_size"],
-            hyperparameters["dropout_rate"],
-            hyperparameters["resolution"],
+            look_back_hours=hyperparameters["look_back_hours"],
+            forecasting_horizon=forecasting_horizon_hours,
+            station_ids=hyperparameters["station_ids"],
+            station_features=hyperparameters["station_features"],
+            global_features=hyperparameters["global_features"],
+            num_hidden_layers=hyperparameters["num_hidden_layers"],
+            hidden_size=hyperparameters["hidden_size"],
+            dropout_rate=hyperparameters["dropout_rate"],
+            resolution=hyperparameters["resolution"],
         )
     else:
         raise ValueError(f"Unknown  architecture: {model_architecture}")
 
 
-def load_best_model(run_id, device):
-    model_dir = Path(f"runs/{run_id}")
-    model_hyperparameters = load_hyperparameters(model_dir)
+def load_best_model(run_id, forecasting_hours, device):
+    model_hyperparameters = load_hyperparameters(run_id, forecasting_hours)
 
-    model = create_model(model_hyperparameters)
+    model_dir = Path(f"runs/{forecasting_hours}_hour_forecasting/{run_id}")
+    model = create_model(model_hyperparameters, forecasting_hours)
     model.load_state_dict(torch.load(model_dir / "best_model.pt", map_location=device))
-
+    
     return model

@@ -18,81 +18,73 @@ class WindDataset(Dataset):
         global_features,
         forecasting_horizon_hours,
     ):
-        self.data = pd.read_csv(
+        x_data = pd.read_csv(
             Path(f"data/processed/{resolution}res/{split}.csv"),
             parse_dates=True,
             index_col="datetime",
         )
 
-        target_data = pd.read_csv(
+        predictions_start_date = (
+            x_data.index[0] - pd.to_timedelta(resolution) + pd.to_timedelta(look_back_hours, unit="h")
+        )
+        predictions_end_date = x_data.index[-1]
+        self.predictions_time_range = pd.date_range(
+            predictions_start_date, predictions_end_date, freq="1h", inclusive="right"
+        )
+
+        x_station_cols = [
+            f"{feature}_{station_id}" for feature in station_features for station_id in station_ids
+        ]
+
+        x_station_data = x_data[x_station_cols]
+        self.x_station_data = self.shape_station_data(x_station_data, station_features, station_ids)
+        self.x_global_data = x_data[global_features].values
+
+        y_data = pd.read_csv(
             Path(f"data/processed/1hres/{split}.csv"), parse_dates=True, index_col="datetime"
         )
         target_col = f"wind_speed_{c.REFERENCE_STATION_ID}"
-        self.target_data = target_data[target_col]
+        y_data = y_data[target_col]
+        self.y_data = y_data.values
 
-        self.start_date = self.data.index[0]
         self.look_back_hours = look_back_hours
-        self.station_ids = station_ids
-        self.resolution = resolution
-        self.station_features = station_features
-        self.global_features = global_features
+        self.rows_per_hour = int(pd.Timedelta("1h") / pd.to_timedelta(resolution))
+        self.look_back_rows = self.rows_per_hour * look_back_hours
+
         self.forecasting_horizon_hours = forecasting_horizon_hours
 
+        self.number_of_samples = len(self.y_data) - look_back_hours - forecasting_horizon_hours + 1
+
     def __len__(self):
-        end_date = self.data.index[-1]
-        effective_start_date = self.start_date - pd.to_timedelta(self.resolution)
-
-        number_of_hours = int((end_date - effective_start_date).total_seconds() / 3600)
-
-        return number_of_hours - self.look_back_hours - self.forecasting_horizon_hours + 1
+        return self.number_of_samples
 
     def __getitem__(self, index):
-        x_station_cols = [
-            f"{feature}_{station_id}"
-            for feature in self.station_features
-            for station_id in self.station_ids
-        ]
-        x_global_cols = self.global_features
+        look_back_start = index * self.rows_per_hour
+        look_back_end = look_back_start + self.look_back_rows
 
-        look_back_start_date = self.start_date + index * pd.to_timedelta(1, "h")
+        x_station = self.x_station_data[look_back_start:look_back_end]
+        x_global = self.x_global_data[look_back_start:look_back_end]
 
-        ## Needed since the measured values are always the average w.r.t. the time since last timestamp
-        look_back_effective_start_date = look_back_start_date - pd.to_timedelta(self.resolution)
-        look_back_end_date = (
-            look_back_effective_start_date + self.look_back_hours * pd.to_timedelta(1, "h")
+        forecasting_horizon_start = index + self.look_back_hours
+        forecasting_horizon_end = forecasting_horizon_start + self.forecasting_horizon_hours
+        y = self.y_data[forecasting_horizon_start:forecasting_horizon_end]
+
+        x_station_tensor = torch.tensor(x_station, dtype=torch.float)
+        x_global_tensor = torch.tensor(
+            x_global,
+            dtype=torch.float,
         )
-
-        x_rows = pd.date_range(look_back_start_date, look_back_end_date, freq=self.resolution)
-
-        x_station_data = self.data.loc[x_rows, x_station_cols]
-        x_global_data = self.data.loc[x_rows, x_global_cols]
-
-        x_station_data_shaped = self.reshape_station_data(x_station_data)
-        x_global_data_shaped = x_global_data.values
-
-        x_station_tensor = torch.tensor(x_station_data_shaped, dtype=torch.float)
-        x_global_tensor = torch.tensor(x_global_data_shaped, dtype=torch.float)
-
-        forecast_horizon_end_date = look_back_end_date + pd.to_timedelta(
-            self.forecasting_horizon_hours, "h"
-        )
-        y_hours = pd.date_range(
-            look_back_end_date, forecast_horizon_end_date, freq="1h", inclusive="right"
-        )
-
-        y_data = self.target_data.loc[y_hours]
-        y_shaped_data = y_data.values
-        y_tensor = torch.tensor(y_shaped_data, dtype=torch.float)
+        y_tensor = torch.tensor(y, dtype=torch.float)
 
         return x_station_tensor, x_global_tensor, y_tensor
 
-    def reshape_station_data(self, data):
-        reshaped_data = np.zeros((len(data), len(self.station_features), len(self.station_ids)))
+    def shape_station_data(self, station_data, station_features, station_ids):
+        reshaped_data = np.zeros((len(station_data), len(station_features), len(station_ids)))
 
-        for feature_idx, feature_name in enumerate(self.station_features):
-            for station_idx, station_id in enumerate(self.station_ids):
+        for feature_idx, feature_name in enumerate(station_features):
+            for station_idx, station_id in enumerate(station_ids):
                 col_name = f"{feature_name}_{station_id}"
-                reshaped_data[:, feature_idx, station_idx] = data[col_name].values
+                reshaped_data[:, feature_idx, station_idx] = station_data[col_name].values
 
         return reshaped_data
 
@@ -104,8 +96,9 @@ def get_data_loaders(
     station_features,
     global_features,
     forecasting_horizon_hours,
-    batch_size,
-    splits
+    splits,
+    batch_size=1,
+    num_workers=1,
 ):
     datasets = [
         WindDataset(
@@ -120,4 +113,14 @@ def get_data_loaders(
         for split in splits
     ]
 
-    return [DataLoader(dataset, batch_size=batch_size, shuffle=False) for dataset in datasets]
+    return [
+        DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=True,
+            num_workers=num_workers,
+            persistent_workers=True,
+        )
+        for dataset in datasets
+    ]

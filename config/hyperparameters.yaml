@@ -6,18 +6,15 @@ dropout_rate: 0.0
 
 # Spatial config
 station_ids:
-- 03897
+- "03897"
 
 # Temporal config
-resolution: 1h
-look_back_hours: 12
+resolution: 10min
+look_back_hours: 1
 
 # Feature selection
 global_features:
 - hour_sin
-- hour_cos
-- day_sin
-- day_cos
 
 station_features:
 - wind_speed

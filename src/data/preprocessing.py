@@ -202,23 +202,27 @@ def scale_features(df, scaler_dict=None):
     return df, scaler_dict
 
 
-def split_dataset(df):
-    """Split the dataset into 70% training set, 15% evaluation set and 15% test set."""
+def get_split_times(df, train_size=0.7, val_size=0.15):
+    """Compute cut-off timestamps (floored to the hour) for train and validation splits."""
 
-    train_size = 0.7
-    val_size = 0.15
+    n = len(df)
 
-    train_index = int(len(df) * train_size)
-    val_index = int(len(df) * (train_size + val_size))
+    train_idx = int(n * train_size)
+    val_idx   = int(n * (train_size + val_size))
+    train_time = df.index[train_idx].floor("h")
+    val_time   = df.index[val_idx].floor("h")
 
-    train_time = df.index[train_index].floor("h")
-    val_time = df.index[val_index].floor("h")
+    return train_time, val_time
 
-    train_data = df[df.index <= train_time]
-    val_data = df[(df.index > train_time) & (df.index <= val_time)]
-    test_data = df[df.index > val_time]
 
-    return [train_data, val_data, test_data]
+def split_dataset(df, train_time, val_time):
+    """Slice df into train/val/test using given times."""
+
+    train = df[df.index <= train_time]
+    val   = df[(df.index > train_time) & (df.index <= val_time)]
+    test  = df[df.index > val_time]
+
+    return train, val, test
 
 
 def get_number_of_nans(df):
@@ -241,6 +245,9 @@ def main():
     print("Create different time resolution datasets...")
     datasets = build_different_time_res(cut_df)
 
+    print("Computing single train/val cut-off times on 10 min resolution…")
+    train_time, val_time = get_split_times(datasets["10min"])
+
     print(
         "Add temporal features, scale features, perform train/val/test splitting for all datasets..."
     )
@@ -251,7 +258,7 @@ def main():
         dataset = add_temporal_features(dataset)
         dataset = transform_wind_direction(dataset)
 
-        train, val, test = split_dataset(dataset)
+        train, val, test = split_dataset(dataset, train_time, val_time)
 
         train, scalers = scale_features(train)
         val, _ = scale_features(val, scaler_dict=scalers)

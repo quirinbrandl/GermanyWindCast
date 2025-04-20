@@ -13,7 +13,7 @@ class PersistenceModel(nn.Module):
         self.wind_speed_idx = wind_speed_idx
         self.reference_station_idx = reference_station_idx
 
-    def forward(self, x_station_feats):
+    def forward(self, x_station_feats, x_global_feats):
         last_observed = x_station_feats[:, -1, self.wind_speed_idx, self.reference_station_idx]
         return last_observed.unsqueeze(1).repeat(1, self.forecasting_hours)
 

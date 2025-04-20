@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-
 def get_zip_links(url, station_ids, product_code):
     """Scrape the given URL for zip file links matching the product code and station IDs."""
     

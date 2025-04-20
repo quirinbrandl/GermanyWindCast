@@ -19,7 +19,6 @@ setup(
         'bs4',
         'scikit-learn',
         'wandb',
-        'torch',
         'torchinfo'
     ],
     python_requires='>=3.6',

@@ -1,20 +1,21 @@
-import torch
-from models.models import PersistenceModel
-from utils.model_utils import load_hyperparameters, create_model
-import wandb
-from data.datasets import get_data_loaders
-from torchinfo import summary
-from pathlib import Path
-import yaml
 import copy
 import random
-import numpy as np
-import joblib
+from pathlib import Path
 
+import numpy as np
+import torch
+import yaml
+from torchinfo import summary
+
+import wandb
+from data.datasets import get_data_loaders
+from models.models import PersistenceModel
+from utils.model_utils import create_model, load_hyperparameters
+from utils.evaluation_utils import inverse_scale_batch_tensor
 
 def load_general_config():
     general_config_path = Path("config/general_config.yaml")
-    with open(general_config_path / "", "r") as f:
+    with open(general_config_path, "r") as f:
         general_config = yaml.safe_load(f)
 
     return general_config
@@ -29,8 +30,9 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-def init_run_directory(hyperparameters):
-    base_run_directory = Path("runs")
+def init_run_directory(hyperparameters, general_config):
+    base_run_directory = Path(f"runs/{general_config["forecasting_hours"]}_hour_forecasting")
+    base_run_directory.mkdir(exist_ok=True)
 
     existing_run_ids = [int(run.name) for run in base_run_directory.iterdir() if run.name.isdigit()]
     next_id = max(existing_run_ids) + 1 if existing_run_ids else 0
@@ -42,21 +44,6 @@ def init_run_directory(hyperparameters):
         yaml.dump(hyperparameters, f)
 
     return run_directory
-
-
-def inverseScaling(y_batch, resolution):
-    scalers_dict = joblib.load(Path(f"data/processed/{resolution}res/scalers.pkl"))
-    scaler = scalers_dict["wind_speed"]
-
-    device = y_batch.device
-    y_batch_np = (
-        y_batch.detach().cpu().numpy()
-    )  # scikit learn's scaler works only with np.array on cpu
-
-    inverse_scaled = np.zeros_like(y_batch)
-    inverse_scaled = scaler.inverse_transform(y_batch_np.reshape(-1, 1)).reshape(y_batch_np.shape)
-
-    return torch.tensor(inverse_scaled, device=device, dtype=y_batch.dtype)
 
 
 def evaluate_model_during_train(model, data_loader, criterion, device):
@@ -87,11 +74,11 @@ def evaluate_final_model(model, data_loader, device, resolution):
 
     with torch.no_grad():
         for x_station, x_global, y in data_loader:
-            y = inverseScaling(y.to(device), resolution)
+            y = inverse_scale_batch_tensor(y.to(device), resolution)
 
             x_station = x_station.to(device)
             x_global = x_global.to(device)
-            predictions = inverseScaling(model(x_station, x_global), resolution)
+            predictions = inverse_scale_batch_tensor(model(x_station, x_global), resolution)
 
             mse_losses.append(mse(predictions, y).item())
             mae_losses.append(mae(predictions, y).item())
@@ -121,8 +108,7 @@ def save_model(model, run_directory):
     return model_path
 
 
-def perform_training_loop(
-    model, train_loader, optimizer, criterion, val_loader, general_config):
+def perform_training_loop(model, train_loader, optimizer, criterion, val_loader, general_config):
     device = general_config["device"]
     use_wandb = general_config["use_wandb"]
 
@@ -132,15 +118,15 @@ def perform_training_loop(
     stopped_epoch = None
     best_epoch = None
 
+    print("Starting training loop...")
     for epoch in range(general_config["max_epochs"]):
-        print("Starting training loop...")
 
         # Training phase
         model.train()
         epoch_losses = []
 
         for x_station, x_global, y in train_loader:
-            x_station = x_station.to()
+            x_station = x_station.to(device)
             x_global = x_global.to(device)
             y = y.to(device)
 
@@ -185,25 +171,35 @@ def perform_training_loop(
     return best_model_state, best_epoch, stopped_epoch
 
 
+def print_model_information(model, data_loader, device):
+    print("General information on the model:")
+
+    sample_batch = next(iter(data_loader))
+    sample_batch_on_device = tuple(x.to(device) for x in sample_batch[:2])
+
+    summary(model, input_data=sample_batch_on_device)
+    print(model)
+
+def init_wandb(hyperparameters, general_config, run_id):
+    if general_config["use_wandb"]:
+        wandb.login()
+        wandb.init(
+            project=general_config["wandb_project"],
+            name=f"{general_config["forecasting_hours"]}_hour_forecasting_run_{run_id}",
+            config=hyperparameters,
+        )
+
+
 def execute_training_pipeline(general_config, hyperparameters):
-    run_directory = init_run_directory(hyperparameters)
+    run_directory = init_run_directory(hyperparameters, general_config)
     run_id = run_directory.name
+
+    use_wandb = general_config["use_wandb"]
+    init_wandb(hyperparameters, general_config, run_id)
 
     print(f"Starting run number {run_id}.")
     print(f"Used general configuration: {general_config}")
     print(f"Used hyperparameters: {hyperparameters}")
-
-    # Initialize WandB
-    use_wandb = general_config["use_wandb"]
-    forecasting_hours = general_config["forecasting_hours"]
-    if use_wandb:
-        wandb.login()
-        wandb.init(
-            project=general_config["wandb_project"],
-            name=f"run_{run_id}",
-            config=hyperparameters,
-            group=f"{forecasting_hours}_forecasting_hours",
-        )
 
     # Load datasets
     print("Loading the dataset...")
@@ -216,31 +212,33 @@ def execute_training_pipeline(general_config, hyperparameters):
         forecasting_horizon_hours=general_config["forecasting_hours"],
         batch_size=general_config["batch_size"],
         splits=["train", "eval"],
+        num_workers=general_config["num_workers"],
     )
 
     # Create model
     device = general_config["device"]
-    model = create_model(hyperparameters, general_config).to(device)
+    model = create_model(hyperparameters, general_config["forecasting_hours"]).to(device)
 
     if use_wandb:
         wandb.watch(model, log="all")
 
-    print("General information on the model:")
-    summary(model, input_data=next(iter(train_loader))[:2])
+    print_model_information(model, train_loader, device)
 
     # Define loss and optimizer
     criterion = torch.nn.MSELoss()
-    Optimizer = getattr(torch.optim, general_config["optimizer"])
-    optimizer = Optimizer(model.parameters(), lr=general_config["learning_rate"])
 
+    # Persistence model does not need training
     if not isinstance(model, PersistenceModel):
+        Optimizer = getattr(torch.optim, general_config["optimizer"])
+        optimizer = Optimizer(model.parameters(), lr=general_config["learning_rate"])
+
         best_model_state, best_epoch, stopped_epoch = perform_training_loop(
             model,
             train_loader=train_loader,
             optimizer=optimizer,
             criterion=criterion,
             val_loader=val_loader,
-            general_config=general_config
+            general_config=general_config,
         )
 
         if use_wandb:
@@ -279,6 +277,6 @@ def execute_training_pipeline(general_config, hyperparameters):
 
 if __name__ == "__main__":
     set_seed(42)
-    hyperparameters = load_hyperparameters()
     general_config = load_general_config()
+    hyperparameters = load_hyperparameters(forecasting_hours=general_config["forecasting_hours"])
     execute_training_pipeline(general_config=general_config, hyperparameters=hyperparameters)
