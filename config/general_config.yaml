@@ -1,9 +1,6 @@
 device: cuda
 use_wandb: true
 wandb_project: wind_forecasting
-batch_size: 128
-learning_rate: 0.00001
-optimizer: Adam
 max_epochs: 50
 early_stopping_patience: 4
 forecasting_hours: 1

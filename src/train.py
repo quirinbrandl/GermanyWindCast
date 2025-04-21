@@ -210,7 +210,7 @@ def execute_training_pipeline(general_config, hyperparameters):
         station_features=hyperparameters["station_features"],
         global_features=hyperparameters["global_features"],
         forecasting_horizon_hours=general_config["forecasting_hours"],
-        batch_size=general_config["batch_size"],
+        batch_size=hyperparameters["batch_size"],
         splits=["train", "eval"],
         num_workers=general_config["num_workers"],
     )
@@ -229,8 +229,8 @@ def execute_training_pipeline(general_config, hyperparameters):
 
     # Persistence model does not need training
     if not isinstance(model, PersistenceModel):
-        Optimizer = getattr(torch.optim, general_config["optimizer"])
-        optimizer = Optimizer(model.parameters(), lr=general_config["learning_rate"])
+        Optimizer = getattr(torch.optim, hyperparameters["optimizer"])
+        optimizer = Optimizer(model.parameters(), lr=hyperparameters["learning_rate"])
 
         best_model_state, best_epoch, stopped_epoch = perform_training_loop(
             model,
