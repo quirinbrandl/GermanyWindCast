@@ -263,12 +263,16 @@ def execute_training_pipeline(general_config, hyperparameters):
         wandb.run.summary["best_model_val_rmse_original_domain"] = rmse
         wandb.run.summary["best_model_val_mae_original_domain"] = mae
 
-    # Save the best model
+    # Save the best model to file system
     model_path = save_model(model, run_directory)
     print(f"Best model saved to {model_path}")
 
+    # Save the best model to wandb
     if use_wandb:
-        wandb.save(str(model_path))
+        artifact = wandb.Artifact(f"best_model_run_{run_id}", type="model")
+        artifact.add_file(str(model_path))
+        wandb.log_artifact(artifact)
+
 
     # Finish WandB logging
     if use_wandb:

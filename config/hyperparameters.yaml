@@ -4,22 +4,35 @@ learning_rate: 0.00001
 optimizer: Adam
 
 # Architecture config
-hidden_size: 128
+hidden_size: 64
 model_architecture: mlp
-num_hidden_layers: 3
+num_hidden_layers: 1
 dropout_rate: 0.0
 
 # Spatial config
-station_ids:
-- "03897"
+station_ids: [
+        "03897",
+        "06163",
+        "05516",
+        "05930",
+        "04271",
+        "00183",
+        "01759",
+        "03032",
+        "04393",
+        "02429",
+        "04625",
+        "00591",
+        "01694",
+        ]
 
 # Temporal config
 resolution: 10min
-look_back_hours: 1
+look_back_hours: 12
 
 # Feature selection
 global_features:
-- hour_sin
 
 station_features:
 - wind_speed
+- air_pressure

@@ -35,8 +35,9 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
 
         look_back_window = int(pd.to_timedelta(look_back_hours, "h") / pd.to_timedelta(resolution))
+        num_global_features = len(global_features) if global_features else 0
         input_size = (
-            (len(station_ids) * len(station_features)) + len(global_features)
+            (len(station_ids) * len(station_features)) + num_global_features
         ) * look_back_window
 
         layers = []

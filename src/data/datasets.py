@@ -38,7 +38,7 @@ class WindDataset(Dataset):
 
         x_station_data = x_data[x_station_cols]
         self.x_station_data = self.shape_station_data(x_station_data, station_features, station_ids)
-        self.x_global_data = x_data[global_features].values
+        self.x_global_data = x_data[global_features].values if global_features else np.empty((0,))
 
         y_data = pd.read_csv(
             Path(f"data/processed/1hres/{split}.csv"), parse_dates=True, index_col="datetime"
