@@ -1,8 +1,6 @@
 device: cuda
 use_wandb: true
 wandb_project: wind_forecasting
-max_epochs: 50
-early_stopping_patience: 4
+wandb_entity: brandlq-university-of-passau
 forecasting_hours: 1
 num_workers: 4
-

@@ -10,15 +10,13 @@ from torchinfo import summary
 import wandb
 from data.datasets import get_data_loaders
 from models.models import PersistenceModel
-from utils.model_utils import create_model, load_hyperparameters
+from utils.model_utils import (
+    create_model,
+    load_hyperparameters,
+    save_hyperparameters,
+    load_general_config,
+)
 from utils.evaluation_utils import inverse_scale_batch_tensor
-
-def load_general_config():
-    general_config_path = Path("config/general_config.yaml")
-    with open(general_config_path, "r") as f:
-        general_config = yaml.safe_load(f)
-
-    return general_config
 
 
 def set_seed(seed):
@@ -40,8 +38,7 @@ def init_run_directory(hyperparameters, general_config):
     run_directory = base_run_directory / str(next_id)
     run_directory.mkdir(parents=True, exist_ok=True)
 
-    with open(run_directory / "hyperparameters.yaml", "w") as f:
-        yaml.dump(hyperparameters, f)
+    save_hyperparameters(hyperparameters, run_directory)
 
     return run_directory
 
@@ -119,7 +116,7 @@ def perform_training_loop(model, train_loader, optimizer, criterion, val_loader,
     best_epoch = None
 
     print("Starting training loop...")
-    for epoch in range(general_config["max_epochs"]):
+    for epoch in range(hyperparameters["max_epochs"]):
 
         # Training phase
         model.train()
@@ -164,7 +161,7 @@ def perform_training_loop(model, train_loader, optimizer, criterion, val_loader,
         else:
             patience_counter += 1
 
-        if patience_counter >= general_config["early_stopping_patience"]:
+        if patience_counter >= hyperparameters["early_stopping_patience"]:
             print(f"Early stopping triggered after {epoch} epochs")
             break
 
@@ -179,6 +176,7 @@ def print_model_information(model, data_loader, device):
 
     summary(model, input_data=sample_batch_on_device)
     print(model)
+
 
 def init_wandb(hyperparameters, general_config, run_id):
     if general_config["use_wandb"]:
@@ -272,7 +270,6 @@ def execute_training_pipeline(general_config, hyperparameters):
         artifact = wandb.Artifact(f"best_model_run_{run_id}", type="model")
         artifact.add_file(str(model_path))
         wandb.log_artifact(artifact)
-
 
     # Finish WandB logging
     if use_wandb:

@@ -4,12 +4,30 @@ import yaml
 import torch
 
 
-def load_hyperparameters(run_id=None, forecasting_hours=1):
-    config_dir = Path("config") if run_id is None else Path(f"runs/{forecasting_hours}_hour_forecasting/{run_id}")
+def load_general_config():
+    general_config_path = Path("config/general_config.yaml")
+    with open(general_config_path, "r") as f:
+        general_config = yaml.safe_load(f)
+
+    return general_config
+
+
+def load_hyperparameters(run_id=None, forecasting_hours=None):
+    config_dir = (
+        Path("config")
+        if run_id is None
+        else Path(f"runs/{forecasting_hours}_hour_forecasting/{run_id}")
+    )
     with open(config_dir / "hyperparameters.yaml", "r") as f:
         hyperparameters = yaml.safe_load(f)
 
     return hyperparameters
+
+
+def save_hyperparameters(hyperparameters, output_dir=None):
+    dir = Path(output_dir) if output_dir else Path("config")
+    with open(dir / "hyperparameters.yaml", "w") as f:
+        yaml.dump(hyperparameters, f)
 
 
 def create_model(hyperparameters, forecasting_horizon_hours):
@@ -39,5 +57,5 @@ def load_best_model(run_id, forecasting_hours, device):
     model_dir = Path(f"runs/{forecasting_hours}_hour_forecasting/{run_id}")
     model = create_model(model_hyperparameters, forecasting_hours)
     model.load_state_dict(torch.load(model_dir / "best_model.pt", map_location=device))
-    
+
     return model

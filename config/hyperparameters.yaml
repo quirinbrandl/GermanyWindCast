@@ -1,38 +1,32 @@
-# Learning config
 batch_size: 128
-learning_rate: 0.00001
-optimizer: Adam
-
-# Architecture config
+dropout_rate: 0.0
+early_stopping_patience: 4
+global_features:
+- day_sin
+- day_cos
 hidden_size: 64
+learning_rate: 1.0e-05
+look_back_hours: 12
+max_epochs: 25
 model_architecture: mlp
 num_hidden_layers: 1
-dropout_rate: 0.0
-
-# Spatial config
-station_ids: [
-        "03897",
-        "06163",
-        "05516",
-        "05930",
-        "04271",
-        "00183",
-        "01759",
-        "03032",
-        "04393",
-        "02429",
-        "04625",
-        "00591",
-        "01694",
-        ]
-
-# Temporal config
+optimizer: Adam
 resolution: 10min
-look_back_hours: 12
-
-# Feature selection
-global_features:
-
 station_features:
 - wind_speed
-- air_pressure
+- wind_direction_cos
+- wind_direction_sin
+station_ids:
+- 03897
+- '06163'
+- '05516'
+- 05930
+- '04271'
+- 00183
+- 01759
+- '03032'
+- 04393
+- 02429
+- '04625'
+- 00591
+- 01694
