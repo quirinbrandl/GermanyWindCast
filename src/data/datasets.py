@@ -25,7 +25,9 @@ class WindDataset(Dataset):
         )
 
         predictions_start_date = (
-            x_data.index[0] - pd.to_timedelta(resolution) + pd.to_timedelta(look_back_hours, unit="h")
+            x_data.index[0]
+            - pd.to_timedelta(resolution)
+            + pd.to_timedelta(look_back_hours, unit="h")
         )
         predictions_end_date = x_data.index[-1]
         self.predictions_time_range = pd.date_range(
@@ -101,14 +103,17 @@ def get_data_loaders(
     num_workers=1,
 ):
     datasets = [
-        WindDataset(
-            split,
-            look_back_hours,
-            resolution,
-            station_ids,
-            station_features,
-            global_features,
-            forecasting_horizon_hours,
+        (
+            WindDataset(
+                split,
+                look_back_hours,
+                resolution,
+                station_ids,
+                station_features,
+                global_features,
+                forecasting_horizon_hours,
+            ),
+            split == "train",
         )
         for split in splits
     ]
@@ -117,10 +122,10 @@ def get_data_loaders(
         DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=shuffle,
             pin_memory=True,
             num_workers=num_workers,
             persistent_workers=True,
         )
-        for dataset in datasets
+        for (dataset, shuffle) in datasets
     ]
