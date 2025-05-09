@@ -1,32 +1,41 @@
 batch_size: 128
 dropout_rate: 0.0
-early_stopping_patience: 4
-global_features:
-- day_sin
-- day_cos
-hidden_size: 64
-learning_rate: 1.0e-05
+early_stopping_patience: 7
+global_features: [air_temperature_03897]
+hidden_channels: 32
+hidden_size: 32
+lstm_hidden_size: 128
+learning_rate: 0.00001
 look_back_hours: 12
-max_epochs: 25
-model_architecture: mlp
-num_hidden_layers: 1
+max_epochs: 50
+model_architecture: persistence
+num_hidden_layers: 3
 optimizer: Adam
 resolution: 10min
 station_features:
 - wind_speed
-- wind_direction_cos
 - wind_direction_sin
-station_ids:
-- 03897
-- '06163'
-- '05516'
-- 05930
-- '04271'
-- 00183
-- 01759
-- '03032'
-- 04393
-- 02429
-- '04625'
-- 00591
-- 01694
+- wind_direction_cos
+weighting: cos_similarity
+knns: 4
+
+station_ids: [
+        "03897",
+        "01759",
+        "06163",
+        "05516",
+        "05930",
+        "04271",
+        "00183",
+        "03032",
+        "04393",
+        "02429",
+        "04625",
+        "00591",
+        "01694",
+    ]
+
+num_gnn_layers: 2
+num_lstm_layers: 2
+use_residual: True
+heads: 4

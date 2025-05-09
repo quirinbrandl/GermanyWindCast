@@ -135,7 +135,6 @@ def fill_missing_values(df, metadata):
         end_date=end_date.strftime("%Y-%m-%d"),
     )
 
-    """ openmeteo_df = pd.read_csv(Path("data/downloads/openmeteo.csv"), parse_dates=True, index_col="datetime") """
     df_filled = df_filled.fillna(openmeteo_df)
     df_filled = df_filled.interpolate("linear")
 
@@ -180,10 +179,13 @@ def transform_wind_direction(df):
     return df_wind_vec
 
 
-def scale_features(df, scaler_dict=None):
-    """Scale the features in the given df."""
+def scale_features(df, scaler_dict=None, fit=False):
+    """
+    Scale the features in the given df per feature type. 
+    If fit=True, fit scalers; otherwise only transform.
+    """
 
-    if scaler_dict == None:
+    if scaler_dict is None:
         scaler_dict = {
             "wind_speed": StandardScaler(),
             "air_temperature": StandardScaler(),
@@ -192,12 +194,18 @@ def scale_features(df, scaler_dict=None):
             "relative_humidity": MinMaxScaler(),
         }
 
-    for col in df.columns:
-        col_base_name = col[:-6]
+    if fit:
+        for feature, scaler in scaler_dict.items():
+            cols = [col for col in df.columns if col.startswith(f"{feature}_")]
 
-        if col_base_name in scaler_dict.keys():
-            scaler = scaler_dict[col_base_name]
-            df.loc[:, col] = scaler.fit_transform(df[col].values.reshape(-1, 1))
+            stacked = df[cols].values.reshape(-1, 1)   # shape (n_samples*n_stations, 1)
+            scaler.fit(stacked)
+
+    for col in df.columns:
+        feature = col[:-6]
+        scaler = scaler_dict.get(feature)
+        if scaler is not None:
+            df.loc[:, col] = scaler.transform(df[col].values.reshape(-1, 1))
 
     return df, scaler_dict
 
@@ -260,9 +268,9 @@ def main():
 
         train, val, test = split_dataset(dataset, train_time, val_time)
 
-        train, scalers = scale_features(train)
-        val, _ = scale_features(val, scaler_dict=scalers)
-        test, _ = scale_features(test, scaler_dict=scalers)
+        train, scalers = scale_features(train, fit=True)
+        val, _ = scale_features(val, scaler_dict=scalers, fit=False)
+        test, _ = scale_features(test, scaler_dict=scalers, fit=False)
 
         output_dir = Path(f"data/processed/{resolution}res")
         output_dir.mkdir(parents=True, exist_ok=True)

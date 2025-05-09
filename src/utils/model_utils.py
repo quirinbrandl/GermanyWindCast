@@ -1,4 +1,5 @@
-from models.models import PersistenceModel, MLP
+import pandas as pd
+from models.models import PersistenceModel, MLP, RNN, WindGCN, GCNRNN, GATRNN
 from pathlib import Path
 import yaml
 import torch
@@ -30,15 +31,19 @@ def save_hyperparameters(hyperparameters, output_dir=None):
         yaml.dump(hyperparameters, f)
 
 
-def create_model(hyperparameters, forecasting_horizon_hours):
+def create_model(hyperparameters, forecasting_hours):
     model_architecture = hyperparameters["model_architecture"]
 
     if model_architecture == "persistence":
-        return PersistenceModel(forecasting_horizon_hours, 0, 0)
+        return PersistenceModel(
+            forecasting_hours=forecasting_hours,
+            station_ids=hyperparameters["station_ids"],
+            station_features=hyperparameters["station_features"],
+        )
     elif model_architecture == "mlp":
         return MLP(
             look_back_hours=hyperparameters["look_back_hours"],
-            forecasting_horizon=forecasting_horizon_hours,
+            forecasting_hours=forecasting_hours,
             station_ids=hyperparameters["station_ids"],
             station_features=hyperparameters["station_features"],
             global_features=hyperparameters["global_features"],
@@ -47,8 +52,68 @@ def create_model(hyperparameters, forecasting_horizon_hours):
             dropout_rate=hyperparameters["dropout_rate"],
             resolution=hyperparameters["resolution"],
         )
+    elif model_architecture == "rnn":
+        return RNN(
+            forecasting_hours=forecasting_hours,
+            station_ids=hyperparameters["station_ids"],
+            station_features=hyperparameters["station_features"],
+            global_features=hyperparameters["global_features"],
+            num_lstm_layers=hyperparameters["num_hidden_layers"],
+            hidden_size=hyperparameters["lstm_hidden_size"],
+            dropout_rate=hyperparameters["dropout_rate"],
+        )
+    elif model_architecture == "gcn":
+        return WindGCN(
+            forecasting_hours=forecasting_hours,
+            station_ids=hyperparameters["station_ids"],
+            station_features=hyperparameters["station_features"],
+            global_features=hyperparameters["global_features"],
+            hidden_channels=hyperparameters["hidden_channels"],
+            dropout_rate=hyperparameters["dropout_rate"],
+            resolution=hyperparameters["resolution"],
+            look_back_hours=hyperparameters["look_back_hours"],
+            use_residual=hyperparameters["use_residual"],
+            linear_hidden_size=hyperparameters["hidden_size"],
+            num_gcn_layers=hyperparameters["num_gnn_layers"],
+            num_linear_layers=hyperparameters["num_linear_layers"],
+        )
+    elif model_architecture == "gcn_rnn":
+        return GCNRNN(
+            forecasting_hours=forecasting_hours,
+            station_ids=hyperparameters["station_ids"],
+            station_features=hyperparameters["station_features"],
+            global_features=hyperparameters["global_features"],
+            hidden_channels=hyperparameters["hidden_channels"],
+            dropout_rate=hyperparameters["dropout_rate"],
+            resolution=hyperparameters["resolution"],
+            look_back_hours=hyperparameters["look_back_hours"],
+            use_residual=hyperparameters["use_residual"],
+            num_lstm_layers=hyperparameters["num_lstm_layers"],
+            lstm_hidden_size=hyperparameters["lstm_hidden_size"],
+            num_gcn_layers=hyperparameters["num_gnn_layers"],
+        )
+    elif model_architecture == "gat_rnn":
+        return GATRNN(
+            forecasting_hours=forecasting_hours,
+            station_ids=hyperparameters["station_ids"],
+            station_features=hyperparameters["station_features"],
+            global_features=hyperparameters["global_features"],
+            hidden_channels=hyperparameters["hidden_channels"],
+            dropout_rate=hyperparameters["dropout_rate"],
+            resolution=hyperparameters["resolution"],
+            look_back_hours=hyperparameters["look_back_hours"],
+            use_residual=hyperparameters["use_residual"],
+            num_lstm_layers=hyperparameters["num_lstm_layers"],
+            lstm_hidden_size=hyperparameters["lstm_hidden_size"],
+            num_gat_layers=hyperparameters["num_gnn_layers"],
+            heads=hyperparameters["heads"],
+        )
     else:
-        raise ValueError(f"Unknown  architecture: {model_architecture}")
+        raise ValueError(f"Unknown architecture: {model_architecture}")
+
+
+def is_model_spatial(model):
+    return isinstance(model, (WindGCN, GCNRNN, GATRNN))
 
 
 def load_best_model(run_id, forecasting_hours, device):

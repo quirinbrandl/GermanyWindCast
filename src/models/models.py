@@ -1,29 +1,45 @@
+import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GCN, GAT
 import utils.constants as c
-import pandas as pd
 
 
 class PersistenceModel(nn.Module):
     """Simple persistence model that predicts the last value observed."""
 
-    def __init__(self, forecasting_hours, wind_speed_idx, reference_station_idx):
+    def __init__(self, forecasting_hours, station_ids, station_features):
         super(PersistenceModel, self).__init__()
         self.forecasting_hours = forecasting_hours
-        self.wind_speed_idx = wind_speed_idx
-        self.reference_station_idx = reference_station_idx
+        self.wind_speed_idx = station_features.index("wind_speed")
+        self.reference_station_idx = station_ids.index(c.REFERENCE_STATION_ID)
+        self.num_stations = len(station_ids)
+        self.num_features = len(station_features)
 
     def forward(self, x_station_feats, x_global_feats):
-        last_observed = x_station_feats[:, -1, self.wind_speed_idx, self.reference_station_idx]
+        bs = x_station_feats.size()[0]
+        x_station_feats = x_station_feats.reshape(bs, -1, self.num_stations, self.num_features)
+        last_observed = x_station_feats[:, -1, self.reference_station_idx, self.wind_speed_idx]
         return last_observed.unsqueeze(1).repeat(1, self.forecasting_hours)
 
 
-class MLP(nn.Module):
+class BaseModel(nn.Module):
+    def __init__(self, forecasting_hours, station_ids, station_features, global_features):
+        super(BaseModel, self).__init__()
+        self.forecasting_hours = forecasting_hours
+        self.station_ids = station_ids
+        self.station_features = station_features
+        self.global_features = global_features
+        self.use_global_features = bool(global_features) if global_features is not None else False
+        self.num_global_features = len(global_features) if global_features else 0
 
+
+class MLP(BaseModel):
     def __init__(
         self,
         look_back_hours,
-        forecasting_horizon,
+        forecasting_hours,
         station_ids,
         station_features,
         global_features,
@@ -32,12 +48,11 @@ class MLP(nn.Module):
         dropout_rate,
         resolution,
     ):
-        super(MLP, self).__init__()
+        super(MLP, self).__init__(forecasting_hours, station_ids, station_features, global_features)
 
         look_back_window = int(pd.to_timedelta(look_back_hours, "h") / pd.to_timedelta(resolution))
-        num_global_features = len(global_features) if global_features else 0
         input_size = (
-            (len(station_ids) * len(station_features)) + num_global_features
+            (len(station_ids) * len(station_features)) + self.num_global_features
         ) * look_back_window
 
         layers = []
@@ -49,16 +64,297 @@ class MLP(nn.Module):
 
             input_size = hidden_size
 
-        layers.append(nn.Linear(hidden_size, forecasting_horizon))
+        layers.append(nn.Linear(hidden_size, forecasting_hours))
 
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x_station_feats, x_global_feats):
-        batch_size = x_station_feats.size(0)
+    def forward(self, x_station, x_global):
+        batch_size = x_station.size(0)
 
-        x_station_flat = x_station_feats.view(batch_size, -1)
-        x_global_flat = x_global_feats.view(batch_size, -1)
-
-        x = torch.cat([x_station_flat, x_global_flat], dim=1)
+        x_station_flat = x_station.reshape(batch_size, -1)
+        if self.use_global_features:
+            x_global_flat = x_global.reshape(batch_size, -1)
+            x = torch.cat([x_station_flat, x_global_flat], dim=1)
+        else:
+            x = x_station_flat
 
         return self.net(x)
+
+
+class RNN(BaseModel):
+    def __init__(
+        self,
+        forecasting_hours,
+        station_ids,
+        station_features,
+        global_features,
+        num_lstm_layers,
+        hidden_size,
+        dropout_rate,
+    ):
+        super(RNN, self).__init__(forecasting_hours, station_ids, station_features, global_features)
+
+        self.lstm = nn.LSTM(
+            input_size=len(station_ids) * len(station_features) + self.num_global_features,
+            hidden_size=hidden_size,
+            num_layers=num_lstm_layers,
+            dropout=dropout_rate,
+            batch_first=True,
+        )
+
+        self.fc = nn.Linear(hidden_size, forecasting_hours)
+
+    def forward(self, x_station, x_global):
+        x = torch.cat([x_station, x_global], dim=2) if self.use_global_features else x_station
+
+        lstm_output, _ = self.lstm(x)
+        lstm_most_recent = lstm_output[:, -1, :]
+        predictions = self.fc(lstm_most_recent)
+
+        return predictions
+
+
+class BaseGNNModel(BaseModel):
+    def __init__(
+        self,
+        forecasting_hours,
+        station_ids,
+        station_features,
+        global_features,
+        hidden_channels,
+        resolution,
+        look_back_hours,
+        use_residual,
+    ):
+        super(BaseGNNModel, self).__init__(
+            forecasting_hours, station_ids, station_features, global_features
+        )
+
+        self.look_back_window = int(
+            pd.to_timedelta(look_back_hours, "h") / pd.to_timedelta(resolution)
+        )
+        self.use_residual = use_residual
+        self.station_embedding = nn.Linear(len(station_features), hidden_channels)
+
+    def process_gnn_output(self, gnn_output, x_global, batch_size):
+        gcn_output_shaped = gnn_output.reshape(
+            batch_size, self.look_back_window, len(self.station_ids), -1
+        )
+        ref_station_index = self.station_ids.index(c.REFERENCE_STATION_ID)
+        gcn_output_ref_station = gcn_output_shaped[:, :, ref_station_index, :]
+
+        return gcn_output_ref_station
+
+    def get_lstm_input(self, gcn_output_ref_station, x_global):
+        return (
+            torch.cat([gcn_output_ref_station, x_global], dim=2)
+            if self.use_global_features
+            else gcn_output_ref_station
+        )
+
+
+class WindGCN(BaseGNNModel):
+    def __init__(
+        self,
+        hidden_channels,
+        linear_hidden_size,
+        num_gcn_layers,
+        num_linear_layers,
+        dropout_rate,
+        station_features,
+        station_ids,
+        global_features,
+        resolution,
+        look_back_hours,
+        forecasting_hours,
+        use_residual,
+    ):
+        super(WindGCN, self).__init__(
+            forecasting_hours,
+            station_ids,
+            station_features,
+            global_features,
+            hidden_channels,
+            dropout_rate,
+            resolution,
+            look_back_hours,
+            use_residual,
+        )
+
+        self.gcn = GCN(hidden_channels, hidden_channels, num_gcn_layers, dropout=dropout_rate)
+
+        mlp_head_layers = []
+        input_size = hidden_channels + self.num_global_features
+
+        for _ in range(num_linear_layers):
+            mlp_head_layers.append(nn.Linear(input_size, linear_hidden_size))
+            mlp_head_layers.append(nn.ReLU())
+            if dropout_rate > 0:
+                mlp_head_layers.append(nn.Dropout(dropout_rate))
+
+            input_size = linear_hidden_size
+        mlp_head_layers.append(nn.Linear(linear_hidden_size, forecasting_hours))
+        self.mlp_head = nn.Sequential(*mlp_head_layers)
+
+    def forward(self, data):
+        batch_size = data.num_graphs
+        x_global = data.x_global
+        x_station = data.x
+        edge_index = data.edge_index
+        weights = data.weights
+
+        x_station_embedded = self.station_embedding(x_station)
+        gcn_output = self.gcn(x_station_embedded, edge_index, edge_weight=weights)
+        if self.use_residual:
+            gcn_output += x_station_embedded
+
+        gcn_output_ref_station = self.process_gnn_output(gcn_output, x_global, batch_size)
+
+        linear_input = gcn_output_ref_station.reshape(batch_size, -1)
+        if self.use_global_features:
+            linear_input_global = x_global.reshape(batch_size, -1)
+            linear_input = torch.cat([linear_input, linear_input_global], dim=1)
+
+        predictions = self.mlp_head(linear_input)
+        return predictions
+
+
+class BaseGNNRNN(BaseGNNModel):
+    def __init__(
+        self,
+        forecasting_hours,
+        station_ids,
+        station_features,
+        global_features,
+        hidden_channels,
+        dropout_rate,
+        resolution,
+        look_back_hours,
+        use_residual,
+        num_lstm_layers,
+        lstm_hidden_size,
+    ):
+        super(BaseGNNRNN, self).__init__(
+            forecasting_hours,
+            station_ids,
+            station_features,
+            global_features,
+            hidden_channels,
+            resolution,
+            look_back_hours,
+            use_residual,
+        )
+
+        self.lstm = nn.LSTM(
+            hidden_channels + self.num_global_features,
+            lstm_hidden_size,
+            num_lstm_layers,
+            batch_first=True,
+            dropout=dropout_rate,
+        )
+        self.fc = nn.Linear(lstm_hidden_size, forecasting_hours)
+
+    def forward(self, data):
+        batch_size = data.num_graphs
+        x_global = data.x_global
+        x_station = data.x
+        edge_index = data.edge_index
+        weights = data.weights
+
+        x_station_embedded = self.station_embedding(x_station)
+        gnn_output = self.apply_gnn(x_station_embedded, edge_index, weights)
+        if self.use_residual:
+            gnn_output += x_station_embedded
+
+        gcn_output_ref_station = self.process_gnn_output(gnn_output, x_global, batch_size)
+
+        lstm_input = self.get_lstm_input(gcn_output_ref_station, x_global)
+        lstm_output, _ = self.lstm(lstm_input)
+        lstm_most_recent = lstm_output[:, -1, :]
+
+        predictions = self.fc(lstm_most_recent)
+        return predictions
+
+    def apply_gnn(self, x_station_embedded, edge_index, weights):
+        raise NotImplementedError("Subclasses must implement this method")
+
+
+class GCNRNN(BaseGNNRNN):
+    def __init__(
+        self,
+        hidden_channels,
+        num_gcn_layers,
+        dropout_rate,
+        station_features,
+        station_ids,
+        global_features,
+        resolution,
+        look_back_hours,
+        forecasting_hours,
+        num_lstm_layers,
+        lstm_hidden_size,
+        use_residual,
+    ):
+        super(GCNRNN, self).__init__(
+            forecasting_hours,
+            station_ids,
+            station_features,
+            global_features,
+            hidden_channels,
+            dropout_rate,
+            resolution,
+            look_back_hours,
+            use_residual,
+            num_lstm_layers,
+            lstm_hidden_size,
+        )
+
+        self.gcn = GCN(hidden_channels, hidden_channels, num_gcn_layers, dropout=dropout_rate)
+
+    def apply_gnn(self, x_station_embedded, edge_index, weights):
+        return self.gcn(x_station_embedded, edge_index, edge_weight=weights)
+
+
+class GATRNN(BaseGNNRNN):
+    def __init__(
+        self,
+        hidden_channels,
+        lstm_hidden_size,
+        use_residual,
+        num_gat_layers,
+        dropout_rate,
+        station_features,
+        station_ids,
+        global_features,
+        resolution,
+        look_back_hours,
+        forecasting_hours,
+        num_lstm_layers,
+        heads,
+    ):
+        super(GATRNN, self).__init__(
+            forecasting_hours,
+            station_ids,
+            station_features,
+            global_features,
+            hidden_channels,
+            dropout_rate,
+            resolution,
+            look_back_hours,
+            use_residual,
+            num_lstm_layers,
+            lstm_hidden_size,
+        )
+
+        self.heads = heads
+        self.gat = GAT(
+            hidden_channels,
+            hidden_channels,
+            num_gat_layers,
+            v2=True,
+            dropout=dropout_rate,
+            heads=heads,
+        )
+
+    def apply_gnn(self, x_station_embedded, edge_index, weights):
+        return self.gat(x_station_embedded, edge_index, edge_weight=weights)

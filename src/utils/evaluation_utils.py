@@ -8,7 +8,8 @@ import torch
 
 import utils.constants as c
 from data.datasets import get_data_loaders
-from utils.model_utils import load_best_model, load_hyperparameters
+from utils.model_utils import load_best_model, load_hyperparameters, load_general_config
+from utils.data_utils import load_dataset
 
 
 def inverse_scale_numpy_array(wind_speeds, resolution):
@@ -40,8 +41,7 @@ def add_ground_truth_to_df(df, ground_truth_resolutions, split):
     df_copy = df.copy(deep=True)
 
     for resolution in ground_truth_resolutions:
-        data_path = Path(f"data/processed/{resolution}res/{split}.csv")
-        dataset_df = pd.read_csv(data_path, parse_dates=True, index_col="datetime")
+        dataset_df = load_dataset(resolution, split)
 
         ground_truth_scaled = dataset_df[f"wind_speed_{c.REFERENCE_STATION_ID}"]
         ground_truth_unscaled = inverse_scale_numpy_array(ground_truth_scaled.values, resolution)
@@ -74,20 +74,73 @@ def get_inference_df(run_ids, forecasting_hours, ground_truth_resolutions=["1h"]
             splits=["eval"],
         )[0]
 
-        predictions = []
+        outs = []
         with torch.no_grad():
-            for x_station, x_global, y in dataloader:
-                prediction = torch.flatten(
-                    inverse_scale_batch_tensor(
-                        model(x_station, x_global), hyperparameters["resolution"]
-                    )
-                ).item()
-                predictions.append(prediction)
+            for idx, (x_station, x_global, y) in enumerate(dataloader):
+                out = inverse_scale_batch_tensor(
+                    model(x_station, x_global), hyperparameters["resolution"]
+                ).cpu()
+                if idx % forecasting_hours == 0:
+                    outs.append(out)
 
-        predictions_index = dataloader.dataset.predictions_time_range
+        if not outs:
+            final_preds = []
+        else:
+            stack = torch.cat(outs, dim=0)
+            final_preds = stack.view(-1).tolist()
+
+        predictions = final_preds
+        predictions_index = calculate_predictions_time_range(split, hyperparameters["look_back_hours"])
         prediction_series = pd.Series(predictions, index=predictions_index)
 
         inference_df[f"run_{run_id}_predictions"] = prediction_series
 
     return inference_df
 
+
+def calculate_predictions_time_range(split, look_back_hours):
+    df = pd.read_csv(f"data/processed/1hres/{split}.csv", index_col="datetime", parse_dates=True)
+
+    predictions_start_date = df.index[0] + pd.to_timedelta(look_back_hours, unit="h")
+    predictions_end_date = df.index[-1]
+    predictions_time_range = pd.date_range(predictions_start_date, predictions_end_date, freq="1h", inclusive="left")
+    return predictions_time_range
+
+
+def get_feature_selection_results(rund_ids, forecasting_hours, wandb_api, base_features):
+    general_config = load_general_config()
+
+    run_names = [f"{forecasting_hours}_hour_forecasting_run_{id}" for id in rund_ids]
+    runs = wandb_api.runs(
+        path=f"{general_config["wandb_entity"]}/{general_config["wandb_project"]}",
+        filters={"display_name": {"$in": run_names}},
+    )
+
+    data = {"features": [], "RMSE": [], "MAE": []}
+
+    for run in runs:
+        rmse = run.summary.get("best_model_val_rmse_original_domain")
+        mae = run.summary.get("best_model_val_mae_original_domain")
+
+        station_features = run.config.get("station_features")
+        global_features = run.config.get("global_features")
+        features = station_features + global_features if global_features else station_features
+
+        data["RMSE"].append(rmse)
+        data["MAE"].append(mae)
+        data["features"].append(features)
+
+    df = pd.DataFrame(data)
+
+    baseline_rmse = df[df["features"].apply(lambda x: x == base_features)]["RMSE"].values[0]
+    df["improvement(RMSE)"] = (baseline_rmse - df["RMSE"]) / baseline_rmse * 100
+    df.sort_values("improvement(RMSE)", inplace=True, ascending=False)
+
+    return df
+
+
+if __name__ == "__main__":
+
+    inference_df = get_inference_df(
+        [22], ground_truth_resolutions=["1h"], split="eval", forecasting_hours=8
+    )

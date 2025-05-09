@@ -1,25 +1,25 @@
-import numpy as np
+import glob
 import os
 import re
-import glob
-import logging
-import requests
 import zipfile
+
+import numpy as np
 import pandas as pd
-import utils.constants as c
+import requests
 from bs4 import BeautifulSoup
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+import utils.constants as c
+
 
 def get_zip_links(url, station_ids, product_code):
     """Scrape the given URL for zip file links matching the product code and station IDs."""
-    
-    logging.info(f"Fetching zip file links from {url} for product '{product_code}'")
+
+    print(f"Fetching zip file links from {url} for product '{product_code}'")
     try:
         response = requests.get(url)
         response.raise_for_status()
     except Exception as e:
-        logging.error(f"Failed to fetch {url}: {e}")
+        print(f"Failed to fetch {url}: {e}")
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -33,7 +33,7 @@ def get_zip_links(url, station_ids, product_code):
                 if sid in station_ids:
                     full_link = url + href
                     links.append(full_link)
-    logging.info(f"Found {len(links)} zip files for product '{product_code}'")
+    print(f"Found {len(links)} zip files for product '{product_code}'")
     return links
 
 
@@ -43,19 +43,19 @@ def download_zip_file(url, save_dir):
     os.makedirs(save_dir, exist_ok=True)
     local_filename = os.path.join(save_dir, url.split("/")[-1])
     if os.path.exists(local_filename):
-        logging.info(f"File '{local_filename}' already exists. Skipping download.")
+        print(f"File '{local_filename}' already exists. Skipping download.")
         return local_filename
 
-    logging.info(f"Downloading '{url}' to '{local_filename}'")
+    print(f"Downloading '{url}' to '{local_filename}'")
     try:
         r = requests.get(url)
         r.raise_for_status()
         with open(local_filename, "wb") as f:
             f.write(r.content)
-        logging.info(f"Downloaded '{local_filename}'")
+        print(f"Downloaded '{local_filename}'")
         return local_filename
     except Exception as e:
-        logging.error(f"Failed to download {url}: {e}")
+        print(f"Failed to download {url}: {e}")
         return None
 
 
@@ -149,7 +149,7 @@ def load_and_process(product, download_folder, station_ids):
 
     df_list = []
     for file in zip_files_for_stations:
-        logging.info(f"Processing file: {file}")
+        print(f"Processing file: {file}")
         df = process_zip_file(file, product)
         if not df.empty:
             df = filter_stations(df, station_ids)
@@ -172,7 +172,7 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
 
     meta_df_list = []
     for file in zip_files_for_stations:
-        logging.info(f"Processing metadata file: {file}")
+        print(f"Processing metadata file: {file}")
         df = process_meta_zip_file(file)
         if not df.empty:
             meta_df_list.append(df)
@@ -207,7 +207,7 @@ def build_metadata_dataset(meta_download_dir, station_ids, output_path, max_end_
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
         most_recent_merged_df.to_csv(output_path, index=False)
-        logging.info(f"Station metadata saved to '{output_path}'")
+        print(f"Station metadata saved to '{output_path}'")
 
 
 def get_starting_and_end_date(metadata_output_path):
@@ -233,9 +233,9 @@ def build_complete_dataset(
 ):
     """Builds a complete dataset by merging wind and temperature data and applying time filtering."""
 
-    logging.info("Loading wind data...")
+    print("Loading wind data...")
     wind_df = load_and_process("wind", wind_download_dir, station_ids)
-    logging.info("Loading temperature data...")
+    print("Loading temperature data...")
     temperature_df = load_and_process("TU", temperature_download_dir, station_ids)
 
     for df in [wind_df, temperature_df]:
@@ -271,7 +271,7 @@ def build_complete_dataset(
     output_dir = os.path.dirname(dataset_output_path)
     os.makedirs(output_dir, exist_ok=True)
     pivot_df.to_csv(dataset_output_path, index=False)
-    logging.info(f"Complete dataset saved to '{dataset_output_path}'")
+    print(f"Complete dataset saved to '{dataset_output_path}'")
 
 
 def insertNaNs(output_path):
@@ -302,7 +302,7 @@ def main():
     for url in meta_zip_links:
         download_zip_file(url, meta_download_dir)
 
-    logging.info("Building station metadata dataset...")
+    print("Building station metadata dataset...")
     build_metadata_dataset(meta_download_dir, c.STATION_IDS, metadata_output_path, max_end_date)
 
     os.makedirs(wind_download_dir, exist_ok=True)
