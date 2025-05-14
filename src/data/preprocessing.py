@@ -1,85 +1,10 @@
 import pandas as pd
 import numpy as np
-import requests
 from pathlib import Path
 import utils.constants as c
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 import joblib
-
-OPEN_METEO_COL_NAME_TO_DATASET_COL_NAME_MAPPING = {
-    "temperature_2m": "air_temperature",
-    "relative_humidity_2m": "relative_humidity",
-    "dew_point_2m": "dew_point",
-    "wind_speed_10m": "wind_speed",
-    "wind_direction_10m": "wind_direction",
-    "surface_pressure": "air_pressure",
-}
-
-
-def load_data():
-    """Load the raw dataset and station metadata."""
-
-    data_path = Path("data/raw/complete_dataset.csv")
-    metadata_path = Path("data/raw/station_metadata.csv")
-
-    df = pd.read_csv(data_path, parse_dates=True, index_col="datetime")
-    metadata = pd.read_csv(metadata_path, dtype={"id": str})
-
-    return df, metadata
-
-
-def build_different_time_res(df_10min):
-    """Build datasets with 20min, 30min and 1h time resolution."""
-    time_resolutions = ["20min", "30min", "1h"]
-
-    datasets = {"10min": df_10min}
-    for res in time_resolutions:
-        datasets[res] = df_10min.resample(res, closed="right", label="right").mean()
-
-    return datasets
-
-
-def get_openmeteo_data(df_metadata, start_date, end_date):
-    """
-    Fetch hourly historical weather data from OpenMeteo API for all stations specified in the
-    metadata dataframe.
-    """
-
-    url = "https://archive-api.open-meteo.com/v1/archive"
-
-    params = {
-        "latitude": df_metadata["geographic_latitude"],
-        "longitude": df_metadata["geographic_longitude"],
-        "elevation": df_metadata["altitude"],
-        "start_date": start_date,
-        "end_date": end_date,
-        "hourly": OPEN_METEO_COL_NAME_TO_DATASET_COL_NAME_MAPPING.keys(),
-        "timezone": "Europe/Berlin",
-    }
-
-    response = requests.get(url, params=params)
-
-    if response.status_code == 200:
-        data = response.json()
-        time_values = data[0]["hourly"]["time"]
-        data_dict = {}
-
-        for i, station in enumerate(data):
-            for (
-                openmeteo_col_name,
-                dataset_col_name,
-            ) in OPEN_METEO_COL_NAME_TO_DATASET_COL_NAME_MAPPING.items():
-                column_name = f"{dataset_col_name}_{c.STATION_IDS[i]}"
-                measurement_data = station["hourly"][openmeteo_col_name]
-                data_dict[column_name] = measurement_data
-
-        openmeteo_df = pd.DataFrame(data_dict, index=pd.to_datetime(time_values))
-        openmeteo_df.index.name = "datetime"
-
-        return openmeteo_df
-    else:
-        print(response)
-        raise Exception(f"Error when accessing OpenMeteo's API: {response.json()}")
+from utils.data_utils import load_dataset, get_time_steps
 
 
 def remove_leading_trailing_nans(df):
@@ -93,55 +18,56 @@ def remove_leading_trailing_nans(df):
     return df[(df.index >= first_non_missing_date) & (df.index <= last_non_missing_date)]
 
 
-def enforce_hourly_start_end_date(df):
+def compute_valid_idxs(df, max_look_back_steps, max_forecasting_steps):
     """
-    If not already the case this method cuts the dataset such that the clock of the start date is
-    hh:10:00 and the clock of the end_date is hh:00:00. This ensures that the dataset starts and
-    ends at full hour since the measurements in the raw dataset are always the average measured in
-    the previous 10 minutes
+    Generate starting indices of all look back windows that itself
+    and their forecasting horizon do not cotain NaNs.
     """
+    has_nan = df.isna().any(axis=1)
+    total_window_size = max_forecasting_steps + max_look_back_steps
 
-    current_start_date = df.index.min()
-    current_end_date = df.index.max()
+    window_has_nan = has_nan.rolling(window=total_window_size).sum().gt(0)
+    window_has_nan = align_window_at_start(window_has_nan, total_window_size, fill_value=True)
 
-    full_hour_start_date = current_start_date.ceil("h") + pd.Timedelta(minutes=10)
-    full_hour_end_date = current_end_date.floor("h")
+    last_valid_idx = len(df) - total_window_size + 1
+    valid_mask = ~window_has_nan.iloc[:last_valid_idx]
 
-    start_end_at_full_hour_mask = (df.index >= full_hour_start_date) & (
-        df.index <= full_hour_end_date
-    )
-
-    return df[start_end_at_full_hour_mask]
+    return np.flatnonzero(valid_mask)
 
 
-def fill_missing_values(df, metadata):
-    """
-    Fill missing values in 10-minute resolution data using hourly data from OpenMeteo and
-    interpolating the rest linearly.
-    """
-    df_filled = df.copy()
+def align_window_at_start(df, window_size, fill_value=None):
+    if fill_value is None:
+        return df.shift(-(window_size - 1))
+    else:
+        return df.shift(-(window_size - 1), fill_value=fill_value)
 
-    missing_dates = df[df.isna().any(axis=1)].index
-    if missing_dates.empty:
-        return df_filled
 
-    start_date = missing_dates.min()
-    end_date = missing_dates.max()
+def split_idxs(idxs, train_ratio, eval_ratio, max_look_back_steps, max_forecasting_steps):
+    num_samples = len(idxs)
+    full_window_length = max_look_back_steps + max_forecasting_steps
+    num_possibly_overlapping_samples = full_window_length - 1
 
-    print("Fetching missing data from OpenMeteo API...")
-    openmeteo_df = get_openmeteo_data(
-        df_metadata=metadata,
-        start_date=start_date.strftime("%Y-%m-%d"),
-        end_date=end_date.strftime("%Y-%m-%d"),
-    )
+    # possibly overlapping samples are not used to prevent data leakage
+    num_used_samples = num_samples - (2 * num_possibly_overlapping_samples)
 
-    df_filled = df_filled.fillna(openmeteo_df)
-    df_filled = df_filled.interpolate("linear")
+    train_size = int(train_ratio * num_used_samples)
+    eval_size = int(eval_ratio * num_used_samples)
 
-    remaining_missing = df_filled.isna().sum().sum()
-    print(f"Missing values are filled. There are {remaining_missing} missing values left.")
+    train_idxs = idxs[:train_size]
 
-    return df_filled
+    eval_start = train_size + num_possibly_overlapping_samples
+    eval_end = eval_start + eval_size
+    eval_idxs = idxs[eval_start:eval_end]
+
+    test_idxs = idxs[eval_end + num_possibly_overlapping_samples :]
+
+    return train_idxs, eval_idxs, test_idxs
+
+
+def save_idxs(train_idxs, eval_idxs, test_idxs, output_dir):
+    pd.Series(train_idxs).to_csv(output_dir / "train_indices.csv", index=False, header=["index"])
+    pd.Series(eval_idxs).to_csv(output_dir / "eval_indices.csv", index=False, header=["index"])
+    pd.Series(test_idxs).to_csv(output_dir / "test_indices.csv", index=False, header=["index"])
 
 
 def add_temporal_features(df):
@@ -165,123 +91,139 @@ def add_temporal_features(df):
 def transform_wind_direction(df):
     """Transform wind direction into sine and cosine features."""
 
-    df_wind_vec = df.copy()
+    df_wind_dir = df.copy()
 
     for station_id in c.STATION_IDS:
         direction_col = f"wind_direction_{station_id}"
         direction_rads = np.deg2rad(df[direction_col])
 
-        df_wind_vec[f"wind_direction_sin_{station_id}"] = np.sin(direction_rads)
-        df_wind_vec[f"wind_direction_cos_{station_id}"] = np.cos(direction_rads)
+        df_wind_dir[f"wind_direction_sin_{station_id}"] = np.sin(direction_rads)
+        df_wind_dir[f"wind_direction_cos_{station_id}"] = np.cos(direction_rads)
 
-        df_wind_vec.drop(columns=[direction_col], inplace=True)
+        df_wind_dir.drop(columns=[direction_col], inplace=True)
 
-    return df_wind_vec
+    return df_wind_dir
 
 
-def scale_features(df, scaler_dict=None, fit=False):
-    """
-    Scale the features in the given df per feature type. 
-    If fit=True, fit scalers; otherwise only transform.
-    """
+def get_feature_from_col(col):
+    feature = col if not col.endswith(tuple(c.STATION_IDS)) else col.rsplit("_", 1)[0]
+    return feature
 
-    if scaler_dict is None:
-        scaler_dict = {
-            "wind_speed": StandardScaler(),
-            "air_temperature": StandardScaler(),
-            "air_pressure": StandardScaler(),
-            "dew_point": StandardScaler(),
-            "relative_humidity": MinMaxScaler(),
-        }
 
-    if fit:
-        for feature, scaler in scaler_dict.items():
-            cols = [col for col in df.columns if col.startswith(f"{feature}_")]
+def scale_features_globally(df, eval_start_idx):
+    df_scaled = df.copy()
 
-            stacked = df[cols].values.reshape(-1, 1)   # shape (n_samples*n_stations, 1)
-            scaler.fit(stacked)
+    training_data = df.iloc[:eval_start_idx]
+    scaler_dict = {}
 
     for col in df.columns:
-        feature = col[:-6]
-        scaler = scaler_dict.get(feature)
-        if scaler is not None:
-            df.loc[:, col] = scaler.transform(df[col].values.reshape(-1, 1))
+        feature = get_feature_from_col(col)
+        scaler_dict.setdefault(feature, StandardScaler())
 
-    return df, scaler_dict
+    for feature, scaler in scaler_dict.items():
+        cols = [col for col in df.columns if col.startswith(f"{feature}")]
 
+        stacked = training_data[cols].values.reshape(-1, 1)
+        scaler.fit(stacked)
 
-def get_split_times(df, train_size=0.7, val_size=0.15):
-    """Compute cut-off timestamps (floored to the hour) for train and validation splits."""
+    for col in df.columns:
+        feature = get_feature_from_col(col)
+        scaler = scaler_dict[feature]
+        df_scaled.loc[:, col] = scaler.transform(df[col].values.reshape(-1, 1)).ravel()
 
-    n = len(df)
-
-    train_idx = int(n * train_size)
-    val_idx   = int(n * (train_size + val_size))
-    train_time = df.index[train_idx].floor("h")
-    val_time   = df.index[val_idx].floor("h")
-
-    return train_time, val_time
+    return df_scaled, scaler_dict
 
 
-def split_dataset(df, train_time, val_time):
-    """Slice df into train/val/test using given times."""
+def scale_features_locally(df, eval_start_idx):
+    df_scaled = df.copy()
 
-    train = df[df.index <= train_time]
-    val   = df[(df.index > train_time) & (df.index <= val_time)]
-    test  = df[df.index > val_time]
+    training_data = df.iloc[:eval_start_idx]
+    scaler_dict = {}
 
-    return train, val, test
+    for col in df.columns:
+        scaler_dict[col] = StandardScaler().fit(training_data[col].values.reshape(-1, 1))
+
+    for col, scaler in scaler_dict.items():
+        df_scaled.loc[:, col] = scaler.transform(df[col].values.reshape(-1, 1)).ravel()
+
+    return df_scaled, scaler_dict
 
 
-def get_number_of_nans(df):
-    return df.isna().sum().sum()
+def precompute_rolling_mean(df, resolution):
+    df_rolling_mean = df.copy()
+
+    window_size = get_time_steps(resolution)
+    df_rolling_mean = df.rolling(window_size).mean()
+    df_rolling_mean = align_window_at_start(df_rolling_mean, window_size)
+
+    return df_rolling_mean
 
 
 def main():
     """Main preprocessing pipeline."""
 
     print("Loading data...")
-    raw_df, metadata_df = load_data()
+    dataset = load_dataset()
 
-    print("Removing and fillin missing values...")
-    no_nan_df = remove_leading_trailing_nans(raw_df)
-    no_nan_df = fill_missing_values(no_nan_df, metadata_df)
+    print("Removing leading and trainling NaNs...")
+    dataset = remove_leading_trailing_nans(dataset)
 
-    print("Enforcing hourly start and end dates...")
-    cut_df = enforce_hourly_start_end_date(no_nan_df)
+    print("Adding temporal features...")
+    dataset = add_temporal_features(dataset)
 
-    print("Create different time resolution datasets...")
-    datasets = build_different_time_res(cut_df)
+    print("Transforming wind direction...")
+    dataset = transform_wind_direction(dataset)
 
-    print("Computing single train/val cut-off times on 10 min resolution…")
-    train_time, val_time = get_split_times(datasets["10min"])
+    print("Calculating valid sliding window indices...")
+    max_look_back_steps = get_time_steps("12h")
+    max_forecasting_steps = get_time_steps("8h")
+    valid_idxs = compute_valid_idxs(dataset, max_look_back_steps, max_forecasting_steps)
 
-    print(
-        "Add temporal features, scale features, perform train/val/test splitting for all datasets..."
+    print("Splitting the idxs in train/test/eval sets...")
+    train_idxs, eval_idxs, test_idxs = split_idxs(
+        valid_idxs,
+        max_look_back_steps=max_look_back_steps,
+        max_forecasting_steps=max_forecasting_steps,
+        train_ratio=0.7,
+        eval_ratio=0.15,
     )
 
-    for resolution in datasets:
-        dataset = datasets[resolution]
+    print("Normalizing features...")
+    dataset_gl_scaled, global_scalers = scale_features_globally(dataset, eval_idxs[0])
+    dataset_lc_scaled, local_scalers = scale_features_locally(dataset, eval_idxs[0])
 
-        dataset = add_temporal_features(dataset)
-        dataset = transform_wind_direction(dataset)
+    idx_lengths = [len(idxs) for idxs in [train_idxs, eval_idxs, test_idxs]]
+    total_size = sum(idx_lengths)
+    train_size, eval_size, test_size = idx_lengths
+    train_percent, eval_percent, test_percent = [
+        (idx_length / total_size) * 100 for idx_length in idx_lengths
+    ]
 
-        train, val, test = split_dataset(dataset, train_time, val_time)
+    summary = (
+        f"In total, there are {total_size} used starting indices for a look-back window.\n"
+        f"- {train_size} ({train_percent:.2f}%) in the training set\n"
+        f"- {eval_size} ({eval_percent:.2f}%) in the evaluation set\n"
+        f"- {test_size} ({test_percent:.2f}%) in the test set."
+    )
 
-        train, scalers = scale_features(train, fit=True)
-        val, _ = scale_features(val, scaler_dict=scalers, fit=False)
-        test, _ = scale_features(test, scaler_dict=scalers, fit=False)
+    print(summary)
 
-        output_dir = Path(f"data/processed/{resolution}res")
-        output_dir.mkdir(parents=True, exist_ok=True)
+    print("Precomputing rolling means for different resolutions and save them...")
+    resolutions = ["10min", "20min", "30min", "1h"]
+    output_dir = Path(f"data/processed/")
 
-        train.to_csv(output_dir / "train.csv")
-        val.to_csv(output_dir / "eval.csv")
-        test.to_csv(output_dir / "test.csv")
+    for res in resolutions:
+        res_dir = output_dir / res
+        res_dir.mkdir(parents=True, exist_ok=True)
+        precompute_rolling_mean(dataset_gl_scaled, res).to_csv(res_dir / "dataset_gl_scaled.csv")
+        precompute_rolling_mean(dataset_lc_scaled, res).to_csv(res_dir / "dataset_lc_scaled.csv")
 
-        joblib.dump(scalers, Path(output_dir / "scalers.pkl"))
+    print("Save indices and scalers...")
+    save_idxs(train_idxs, eval_idxs, test_idxs, output_dir)
+    joblib.dump(global_scalers, output_dir / "global_scalers.pkl")
+    joblib.dump(local_scalers, output_dir / "local_scalers.pkl")
 
-    print("Preprocessing completed. Datasets saved to data/processed/")
+    print(f"Preprocessing completed. Everything saved to {output_dir}.")
 
 
 if __name__ == "__main__":

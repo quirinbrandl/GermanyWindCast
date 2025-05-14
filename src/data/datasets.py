@@ -10,7 +10,7 @@ from torch_geometric.data import Dataset as GraphDataset
 from torch_geometric.loader import DataLoader as GraphDataLoader
 
 import utils.constants as c
-from utils.data_utils import load_dataset
+from utils.data_utils import load_dataset, load_indices, get_time_steps
 
 
 class BaseWindDataset:
@@ -23,20 +23,31 @@ class BaseWindDataset:
         station_features,
         global_features,
         forecasting_horizon_hours,
+        use_global_scaling,
     ):
-        self.x_station_data, self.x_global_data = self._load_x_data(
-            resolution, split, station_features, station_ids, global_features
+        self.step_size_x = get_time_steps(resolution)
+        self.step_size_y = get_time_steps("1h")
+
+        self.idxs = load_indices(split)["index"].values
+        self.look_back_rows = get_time_steps(f"{look_back_hours}h")
+        self.forecasting_rows = get_time_steps(f"{forecasting_horizon_hours}h")
+        self.look_back_steps = get_time_steps(f"{look_back_hours}h", resolution=resolution)
+
+        self.x_station_data, self.x_global_data, self.y_data = self._load_data(
+            resolution,
+            station_features,
+            station_ids,
+            global_features,
+            use_globally_scaled=use_global_scaling,
         )
-        self.y_data = self._load_y_data(split)
 
-        self.look_back_hours = look_back_hours
-        self.rows_per_hour = self._calculate_rows_per_hour(resolution)
-        self.look_back_rows = self.rows_per_hour * look_back_hours
-        self.forecasting_horizon_hours = forecasting_horizon_hours
-        self.num_samples = self._calculate_number_of_samples()
-
-    def _load_x_data(self, resolution, split, station_features, station_ids, global_features):
-        x_data = load_dataset(resolution, split)
+    def _load_data(
+        self, resolution, station_features, station_ids, global_features, use_globally_scaled
+    ):
+        x_data = load_dataset(
+            processed=True, is_global_scaled=use_globally_scaled, resolution=resolution
+        )
+        y_data = load_dataset(processed=True, is_global_scaled=use_globally_scaled, resolution="1h")
         x_station_cols = [
             f"{feature}_{station_id}" for feature in station_features for station_id in station_ids
         ]
@@ -44,21 +55,9 @@ class BaseWindDataset:
 
         x_global_data = x_data[global_features].values if global_features else np.empty((0,))
 
-        return x_station_data, x_global_data
+        y_data = y_data[f"wind_speed_{c.REFERENCE_STATION_ID}"].values
 
-    def _load_y_data(self, split):
-        y_data = pd.read_csv(
-            Path(f"data/processed/1hres/{split}.csv"), parse_dates=True, index_col="datetime"
-        )
-        target_col = f"wind_speed_{c.REFERENCE_STATION_ID}"
-        y_data = y_data[target_col]
-        return y_data.values
-
-    def _calculate_rows_per_hour(self, resolution):
-        return int(pd.Timedelta("1h") / pd.to_timedelta(resolution))
-
-    def _calculate_number_of_samples(self):
-        return len(self.y_data) - self.look_back_hours - self.forecasting_horizon_hours + 1
+        return x_station_data, x_global_data, y_data
 
 
 class WindDataset(BaseWindDataset, Dataset):
@@ -72,6 +71,7 @@ class WindDataset(BaseWindDataset, Dataset):
         station_features,
         global_features,
         forecasting_horizon_hours,
+        use_global_scaling,
     ):
         super().__init__(
             split=split,
@@ -81,28 +81,29 @@ class WindDataset(BaseWindDataset, Dataset):
             station_features=station_features,
             global_features=global_features,
             forecasting_horizon_hours=forecasting_horizon_hours,
+            use_global_scaling=use_global_scaling,
         )
+
         self.x_station_data = self.x_station_data.values
 
     def __len__(self):
-        return self.num_samples
+        return len(self.idxs)
 
     def __getitem__(self, index):
-        look_back_start = index * self.rows_per_hour
+        look_back_start = self.idxs[index]
         look_back_end = look_back_start + self.look_back_rows
 
-        x_station = self.x_station_data[look_back_start:look_back_end]
-        x_global = self.x_global_data[look_back_start:look_back_end]
-
-        forecasting_horizon_start = index + self.look_back_hours
-        forecasting_horizon_end = forecasting_horizon_start + self.forecasting_horizon_hours
-        y = self.y_data[forecasting_horizon_start:forecasting_horizon_end]
-
+        x_station = self.x_station_data[look_back_start : look_back_end : self.step_size_x]
         x_station_tensor = torch.tensor(x_station, dtype=torch.float)
+
+        x_global = self.x_global_data[look_back_start : look_back_end : self.step_size_x]
         x_global_tensor = torch.tensor(
             x_global,
             dtype=torch.float,
         )
+
+        forecasting_horizon_end = look_back_end + self.forecasting_rows
+        y = self.y_data[look_back_end : forecasting_horizon_end : self.step_size_y]
         y_tensor = torch.tensor(y, dtype=torch.float)
 
         return x_station_tensor, x_global_tensor, y_tensor
@@ -121,6 +122,7 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         forecasting_horizon_hours,
         weighting,
         knns,
+        use_global_scaling,
     ):
         BaseWindDataset.__init__(
             self,
@@ -131,10 +133,14 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
             station_features=station_features,
             global_features=global_features,
             forecasting_horizon_hours=forecasting_horizon_hours,
+            use_global_scaling=use_global_scaling,
         )
         GraphDataset.__init__(self)
 
-        self.station_features = station_features
+        self.x_station_data = self._shape_station_data(
+            self.x_station_data, station_features, station_ids
+        )
+
         self.num_stations = len(station_ids)
         self.num_station_features = len(station_features)
 
@@ -148,33 +154,29 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         if weighting:
             self.weights = self._build_weights(weight_matrix)
 
-        self.x_station_data = self._shape_station_data(
-            self.x_station_data, station_features, station_ids
-        )
-
     def len(self):
-        return self.num_samples
+        return len(self.idxs)
 
     def get(self, index):
-        look_back_start = index * self.rows_per_hour
+        look_back_start = self.idxs[index]
         look_back_end = look_back_start + self.look_back_rows
 
-        x_station = self.x_station_data[
-            look_back_start * self.num_stations : look_back_end * self.num_stations
-        ]
-        x_global = self.x_global_data[look_back_start:look_back_end]
-
-        forecasting_horizon_start = index + self.look_back_hours
-        forecasting_horizon_end = forecasting_horizon_start + self.forecasting_horizon_hours
-        y = self.y_data[forecasting_horizon_start:forecasting_horizon_end]
-
+        x_station = self.x_station_data[look_back_start : look_back_end : self.step_size_x]
+        x_station = x_station.reshape(
+            self.look_back_steps * self.num_stations, self.num_station_features
+        )
         x_station_tensor = torch.tensor(x_station, dtype=torch.float)
+
+        x_global = self.x_global_data[look_back_start : look_back_end : self.step_size_x]
         x_global_tensor = torch.tensor(
             x_global,
             dtype=torch.float,
         ).unsqueeze(
             0
         )  # PyG concatenates along dimension 0 when creating batches
+
+        forecasting_horizon_end = look_back_end + self.forecasting_rows
+        y = self.y_data[look_back_end : forecasting_horizon_end : self.step_size_y]
         y_tensor = torch.tensor(y, dtype=torch.float).unsqueeze(0)
 
         data = GraphData(
@@ -188,17 +190,17 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         return data
 
     def _shape_station_data(self, station_data, station_features, station_ids):
-        look_back_steps = len(station_data)
+        look_back_rows = len(station_data)
         num_station_features = len(station_features)
         num_stations = len(station_ids)
 
-        shaped_data = np.zeros((look_back_steps * num_stations, num_station_features))
+        shaped_data = np.zeros((look_back_rows, num_stations, num_station_features))
 
         for feature_idx, feature_name in enumerate(station_features):
             for station_idx, station_id in enumerate(station_ids):
                 col_name = f"{feature_name}_{station_id}"
                 col_vals = station_data[col_name].values
-                shaped_data[station_idx::num_stations, feature_idx] = col_vals
+                shaped_data[:, station_idx, feature_idx] = col_vals
 
         return shaped_data
 
@@ -328,6 +330,7 @@ def get_data_loaders(
     global_features,
     forecasting_horizon_hours,
     splits,
+    use_global_scaling,
     batch_size=1,
     num_workers=1,
     is_spatial=False,
@@ -344,6 +347,7 @@ def get_data_loaders(
         station_features=station_features,
         global_features=global_features,
         forecasting_horizon_hours=forecasting_horizon_hours,
+        use_global_scaling=use_global_scaling,
     )
     if is_spatial:
         ds_kwargs["knns"] = knns

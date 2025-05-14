@@ -1,41 +1,67 @@
+# General run config
 batch_size: 128
-dropout_rate: 0.0
-early_stopping_patience: 7
-global_features: [air_temperature_03897]
-hidden_channels: 32
-hidden_size: 32
-lstm_hidden_size: 128
-learning_rate: 0.00001
-look_back_hours: 12
-max_epochs: 50
-model_architecture: persistence
-num_hidden_layers: 3
+learning_rate: 1.0e-05
+early_stopping_patience: 5
+max_epochs: 25
 optimizer: Adam
-resolution: 10min
+model_architecture: mlp
+dropout_rate: 0.0
+
+# whether to fit the scaler on the data of all stations combined or only per station
+use_global_scaling: True
+
+# Feature selection
+global_features:
+- hour_cos
+- hour_sin
 station_features:
 - wind_speed
 - wind_direction_sin
 - wind_direction_cos
-weighting: cos_similarity
-knns: 4
 
+# Spatial config
 station_ids: [
-        "03897",
-        "01759",
-        "06163",
-        "05516",
-        "05930",
-        "04271",
-        "00183",
-        "03032",
-        "04393",
-        "02429",
-        "04625",
-        "00591",
-        "01694",
-    ]
+    "03897",
+    "01759",
+    "06163",
+    "05516",
+    "05930",
+    "04271",
+    "00183",
+    "03032",
+    "04393",
+    "02429",
+    "04625",
+    "00591",
+    "01694",
+    "01975",
+    "04039",
+    "03093",
+    "04466",
+    "02907",
+    "04642",
+    "02115"
+]
 
-num_gnn_layers: 2
+# Temporal config
+look_back_hours: 12
+resolution: 10min
+
+# Linear layer config
+hidden_size: 64
+num_hidden_layers: 1
+
+# RNN config
 num_lstm_layers: 2
+lstm_hidden_size: 64
+
+# GNN config
+hidden_channels: 64
+num_gnn_layers: 2
 use_residual: True
-heads: 4
+# method for weighting the edges in th graph (distance, cos_similarity, spearman_similarity, pearson_similarity)
+weighting: distance 
+knns: 4 # degree of connectivity for each node in the graph; if not provided then fully connected graph
+
+# GAT config
+heads: 1 # number of attention heads for GAT

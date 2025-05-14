@@ -1,6 +1,7 @@
 import subprocess
+import sys
 
-from utils.model_utils import save_hyperparameters, load_hyperparameters
+from utils.model_utils import load_hyperparameters, save_hyperparameters
 
 
 def run_training_with_features(station_features, global_features):
@@ -10,20 +11,30 @@ def run_training_with_features(station_features, global_features):
 
     save_hyperparameters(hyperparameters)
 
-    subprocess.run(["python", "src/train.py"])
+    subprocess.run([sys.executable, "src/train.py"])
 
 
 if __name__ == "__main__":
 
-    base_station_features = ["wind_speed", "wind_direction_sin", "wind_direction_cos", "relative_humidity"]
-    base_global_features = ["hour_sin", "hour_cos", "day_sin", "day_cos"]
+    base_station_features = ["wind_speed"]
+    base_global_features = []
 
     station_options_to_test = [
         ["dew_point"],
         ["air_pressure"],
         ["air_temperature"],
+        ["wind_direction_sin", "wind_direction_cos"],
+        ["relative_humidity"],
     ]
-    global_features_to_test = []
+    global_features_to_test = [
+        ["dew_point_03897"],
+        ["air_pressure_03897"],
+        ["air_temperature_03897"],
+        ["wind_direction_sin_03897", "wind_direction_cos_03897"],
+        ["relative_humidity_03897"],
+        ["day_sin", "day_cos"],
+        ["hour_cos", "hour_sin"],
+    ]
 
     for feat in station_options_to_test:
         station_feats = base_station_features + feat

@@ -12,8 +12,8 @@ from utils.model_utils import load_best_model, load_hyperparameters, load_genera
 from utils.data_utils import load_dataset
 
 
-def inverse_scale_numpy_array(wind_speeds, resolution):
-    scalers_dict = joblib.load(Path(f"data/processed/{resolution}res/scalers.pkl"))
+def inverse_scale_numpy_array(wind_speeds):
+    scalers_dict = joblib.load(Path(f"data/processed/scalers.pkl"))
     scaler = scalers_dict["wind_speed"]
 
     inverse_scaled = np.zeros_like(wind_speeds)
@@ -22,9 +22,16 @@ def inverse_scale_numpy_array(wind_speeds, resolution):
     return inverse_scaled
 
 
-def inverse_scale_batch_tensor(y_batch, resolution):
-    scalers_dict = joblib.load(Path(f"data/processed/{resolution}res/scalers.pkl"))
-    scaler = scalers_dict["wind_speed"]
+def inverse_scale_batch_tensor(y_batch, use_global_scaler):
+    if use_global_scaler:
+        file_name = "global_scalers.pkl"
+        scaler_key = "wind_speed"
+    else:
+        file_name = "local_scalers.pkl"
+        scaler_key = f"wind_speed_{c.REFERENCE_STATION_ID}"
+    
+    scalers_dict = joblib.load(Path(f"data/processed/{file_name}"))
+    scaler = scalers_dict[scaler_key]
 
     y_batch_np = (
         y_batch.detach().cpu().numpy()
@@ -44,7 +51,7 @@ def add_ground_truth_to_df(df, ground_truth_resolutions, split):
         dataset_df = load_dataset(resolution, split)
 
         ground_truth_scaled = dataset_df[f"wind_speed_{c.REFERENCE_STATION_ID}"]
-        ground_truth_unscaled = inverse_scale_numpy_array(ground_truth_scaled.values, resolution)
+        ground_truth_unscaled = inverse_scale_numpy_array(ground_truth_scaled.values)
 
         ground_truth_index = ground_truth_scaled.index
         ground_truth = pd.Series(ground_truth_unscaled, index=ground_truth_index)
@@ -77,9 +84,7 @@ def get_inference_df(run_ids, forecasting_hours, ground_truth_resolutions=["1h"]
         outs = []
         with torch.no_grad():
             for idx, (x_station, x_global, y) in enumerate(dataloader):
-                out = inverse_scale_batch_tensor(
-                    model(x_station, x_global), hyperparameters["resolution"]
-                ).cpu()
+                out = inverse_scale_batch_tensor(model(x_station, x_global)).cpu()
                 if idx % forecasting_hours == 0:
                     outs.append(out)
 
@@ -90,7 +95,9 @@ def get_inference_df(run_ids, forecasting_hours, ground_truth_resolutions=["1h"]
             final_preds = stack.view(-1).tolist()
 
         predictions = final_preds
-        predictions_index = calculate_predictions_time_range(split, hyperparameters["look_back_hours"])
+        predictions_index = calculate_predictions_time_range(
+            split, hyperparameters["look_back_hours"]
+        )
         prediction_series = pd.Series(predictions, index=predictions_index)
 
         inference_df[f"run_{run_id}_predictions"] = prediction_series
@@ -103,7 +110,9 @@ def calculate_predictions_time_range(split, look_back_hours):
 
     predictions_start_date = df.index[0] + pd.to_timedelta(look_back_hours, unit="h")
     predictions_end_date = df.index[-1]
-    predictions_time_range = pd.date_range(predictions_start_date, predictions_end_date, freq="1h", inclusive="left")
+    predictions_time_range = pd.date_range(
+        predictions_start_date, predictions_end_date, freq="1h", inclusive="left"
+    )
     return predictions_time_range
 
 

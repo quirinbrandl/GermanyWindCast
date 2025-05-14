@@ -230,6 +230,7 @@ def build_complete_dataset(
     dataset_output_path,
     metadata_output_path,
     station_ids,
+    min_start_date,
 ):
     """Builds a complete dataset by merging wind and temperature data and applying time filtering."""
 
@@ -245,6 +246,8 @@ def build_complete_dataset(
     merged_df.sort_values(by=["station_id", "datetime"], inplace=True)
 
     (start_date, end_date) = get_starting_and_end_date(metadata_output_path)
+    start_date = max(start_date, min_start_date)
+
     station_validity_mask = (merged_df["datetime"] >= start_date) & (
         merged_df["datetime"] <= end_date
     )
@@ -291,9 +294,10 @@ def main():
     wind_download_dir = os.path.join("data", "downloads", "wind")
     temperature_download_dir = os.path.join("data", "downloads", "air_temperature")
     metadata_output_path = os.path.join("data", "raw", "station_metadata.csv")
-    dataset_output_path = os.path.join("data", "raw", "complete_dataset.csv")
+    dataset_output_path = os.path.join("data", "raw", "dataset.csv")
 
     max_end_date = pd.to_datetime("2023-12-31")
+    min_start_date = pd.to_datetime("2017-01-01")
 
     os.makedirs(meta_download_dir, exist_ok=True)
     meta_zip_links = [
@@ -322,6 +326,7 @@ def main():
         dataset_output_path,
         metadata_output_path,
         c.STATION_IDS,
+        min_start_date
     )
 
     insertNaNs(dataset_output_path)

@@ -58,7 +58,7 @@ def evaluate_model_during_train(model, data_loader, criterion, device):
     return sum(losses) / len(losses)
 
 
-def evaluate_final_model(model, data_loader, device, resolution):
+def evaluate_final_model(model, data_loader, device, use_global_scaling):
     model.eval()
 
     mse = torch.nn.MSELoss()
@@ -71,8 +71,8 @@ def evaluate_final_model(model, data_loader, device, resolution):
         for batch in data_loader:
             predictions, y = make_predictions(batch, model, device)
 
-            y = inverse_scale_batch_tensor(y, resolution)
-            predictions = inverse_scale_batch_tensor(predictions, resolution)
+            y = inverse_scale_batch_tensor(y, use_global_scaling)
+            predictions = inverse_scale_batch_tensor(predictions, use_global_scaling)
 
             mse_losses.append(mse(predictions, y).item())
             mae_losses.append(mae(predictions, y).item())
@@ -254,7 +254,8 @@ def execute_training_pipeline(general_config, hyperparameters):
         num_workers=general_config["num_workers"],
         is_spatial=is_model_spatial(model),
         weighting=hyperparameters.get("weighting"),
-        knns=hyperparameters.get("knns")
+        knns=hyperparameters.get("knns"),
+        use_global_scaling=hyperparameters["use_global_scaling"]
     )
     print_model_information(model, train_loader, device)
 
@@ -280,7 +281,7 @@ def execute_training_pipeline(general_config, hyperparameters):
         log_run_summary_epochs(use_wandb, stopped_epoch, best_epoch)
         model.load_state_dict(best_model_state)
 
-    mse, mae = evaluate_final_model(model, val_loader, device, hyperparameters["resolution"])
+    mse, mae = evaluate_final_model(model, val_loader, device, hyperparameters["use_global_scaling"])
     rmse = np.sqrt(mse)
     log_run_summary_errors(use_wandb, mse, rmse, mae)
     save_model(model, run_directory, use_wandb, run_id)
