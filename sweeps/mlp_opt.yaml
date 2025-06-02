@@ -1,0 +1,21 @@
+program: train.py
+method: bayes
+
+metric:
+  name: best_model_val_rmse_original_domain          
+  goal: minimize
+
+parameters:
+  hidden_size:
+    distribution: int_uniform
+    min: 32
+    max: 128
+  dropout_rate:
+    distribution: uniform
+    min: 0.0
+    max: 0.5
+  num_hidden_layers:
+    distribution: int_uniform
+    min: 1
+    max: 3
+

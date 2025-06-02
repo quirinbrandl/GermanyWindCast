@@ -89,13 +89,12 @@ def make_predictions(batch, model, device):
         predictions = model(batch)
         y = batch.y
     else:
-        x_station, x_global, y = batch
+        x, y = batch
 
-        x_global = x_global.to(device)
-        x_station = x_station.to(device)
+        x = x.to(device)
         y = y.to(device)
 
-        predictions = model(x_station, x_global)
+        predictions = model(x)
 
     return predictions, y
 
@@ -188,7 +187,7 @@ def print_model_information(model, data_loader, device):
         sample_batch_on_device = sample_batch.to(device)
         print(graph_summary(model, data=sample_batch_on_device))
     else:
-        sample_batch_on_device = tuple(x.to(device) for x in sample_batch[:2])
+        sample_batch_on_device = sample_batch[0].to(device)
         summary(model, input_data=sample_batch_on_device)
 
     print(model)

@@ -102,11 +102,13 @@ class WindDataset(BaseWindDataset, Dataset):
             dtype=torch.float,
         )
 
+        x_tensor = torch.concat((x_station_tensor, x_global_tensor), dim=1)
+
         forecasting_horizon_end = look_back_end + self.forecasting_rows
         y = self.y_data[look_back_end : forecasting_horizon_end : self.step_size_y]
         y_tensor = torch.tensor(y, dtype=torch.float)
 
-        return x_station_tensor, x_global_tensor, y_tensor
+        return x_tensor, y_tensor
 
 
 class WindDatasetSpatial(BaseWindDataset, GraphDataset):

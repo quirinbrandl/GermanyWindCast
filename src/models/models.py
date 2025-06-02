@@ -17,11 +17,9 @@ class PersistenceModel(nn.Module):
         self.num_stations = len(station_ids)
         self.num_features = len(station_features)
 
-    def forward(self, x_station_feats, x_global_feats):
-        bs = x_station_feats.size()[0]
-        x_station_feats = x_station_feats.reshape(bs, -1, self.num_stations, self.num_features)
-        last_observed = x_station_feats[:, -1, self.reference_station_idx, self.wind_speed_idx]
-        return last_observed.unsqueeze(1).repeat(1, self.forecasting_hours)
+    def forward(self, x_tensor):
+        last_observed_at_ref_station = x_tensor[:, -1, (self.reference_station_idx + 1) * self.wind_speed_idx]
+        return last_observed_at_ref_station.unsqueeze(1).repeat(1, self.forecasting_hours)
 
 
 class BaseModel(nn.Module):
@@ -68,17 +66,11 @@ class MLP(BaseModel):
 
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x_station, x_global):
-        batch_size = x_station.size(0)
+    def forward(self, x):
+        batch_size = x.size(0)
+        x_station_flat = x.reshape(batch_size, -1)
 
-        x_station_flat = x_station.reshape(batch_size, -1)
-        if self.use_global_features:
-            x_global_flat = x_global.reshape(batch_size, -1)
-            x = torch.cat([x_station_flat, x_global_flat], dim=1)
-        else:
-            x = x_station_flat
-
-        return self.net(x)
+        return self.net(x_station_flat)
 
 
 class RNN(BaseModel):
@@ -104,9 +96,7 @@ class RNN(BaseModel):
 
         self.fc = nn.Linear(hidden_size, forecasting_hours)
 
-    def forward(self, x_station, x_global):
-        x = torch.cat([x_station, x_global], dim=2) if self.use_global_features else x_station
-
+    def forward(self, x):
         lstm_output, _ = self.lstm(x)
         lstm_most_recent = lstm_output[:, -1, :]
         predictions = self.fc(lstm_most_recent)
@@ -136,7 +126,7 @@ class BaseGNNModel(BaseModel):
         self.use_residual = use_residual
         self.station_embedding = nn.Linear(len(station_features), hidden_channels)
 
-    def process_gnn_output(self, gnn_output, x_global, batch_size):
+    def process_gnn_output(self, gnn_output, batch_size):
         gcn_output_shaped = gnn_output.reshape(
             batch_size, self.look_back_window, len(self.station_ids), -1
         )
@@ -208,7 +198,7 @@ class WindGCN(BaseGNNModel):
         if self.use_residual:
             gcn_output += x_station_embedded
 
-        gcn_output_ref_station = self.process_gnn_output(gcn_output, x_global, batch_size)
+        gcn_output_ref_station = self.process_gnn_output(gcn_output, batch_size)
 
         linear_input = gcn_output_ref_station.reshape(batch_size, -1)
         if self.use_global_features:
@@ -266,7 +256,7 @@ class BaseGNNRNN(BaseGNNModel):
         if self.use_residual:
             gnn_output += x_station_embedded
 
-        gcn_output_ref_station = self.process_gnn_output(gnn_output, x_global, batch_size)
+        gcn_output_ref_station = self.process_gnn_output(gnn_output, batch_size)
 
         lstm_input = self.get_lstm_input(gcn_output_ref_station, x_global)
         lstm_output, _ = self.lstm(lstm_input)
@@ -357,4 +347,4 @@ class GATRNN(BaseGNNRNN):
         )
 
     def apply_gnn(self, x_station_embedded, edge_index, weights):
-        return self.gat(x_station_embedded, edge_index, edge_weight=weights)
+        return self.gat(x_station_embedded, edge_index)
