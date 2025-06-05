@@ -2,5 +2,5 @@ device: cuda
 use_wandb: true
 wandb_project: wind_forecasting
 wandb_entity: brandlq-university-of-passau
-forecasting_hours: 1
+forecasting_hours: 4
 num_workers: 4

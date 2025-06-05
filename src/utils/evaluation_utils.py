@@ -116,7 +116,7 @@ def calculate_predictions_time_range(split, look_back_hours):
     return predictions_time_range
 
 
-def get_feature_selection_results(rund_ids, forecasting_hours, wandb_api, base_features):
+def get_feature_selection_results(rund_ids, forecasting_hours, wandb_api, base_features=None):
     general_config = load_general_config()
 
     run_names = [f"{forecasting_hours}_hour_forecasting_run_{id}" for id in rund_ids]
@@ -125,7 +125,7 @@ def get_feature_selection_results(rund_ids, forecasting_hours, wandb_api, base_f
         filters={"display_name": {"$in": run_names}},
     )
 
-    data = {"features": [], "RMSE": [], "MAE": []}
+    data = {"station_features": [], "global_features": [], "RMSE": [], "MAE": []}
 
     for run in runs:
         rmse = run.summary.get("best_model_val_rmse_original_domain")
@@ -133,23 +133,17 @@ def get_feature_selection_results(rund_ids, forecasting_hours, wandb_api, base_f
 
         station_features = run.config.get("station_features")
         global_features = run.config.get("global_features")
-        features = station_features + global_features if global_features else station_features
 
         data["RMSE"].append(rmse)
         data["MAE"].append(mae)
-        data["features"].append(features)
+        data["station_features"].append(station_features)
+        data["global_features"].append(global_features)
 
     df = pd.DataFrame(data)
-
-    baseline_rmse = df[df["features"].apply(lambda x: x == base_features)]["RMSE"].values[0]
-    df["improvement(RMSE)"] = (baseline_rmse - df["RMSE"]) / baseline_rmse * 100
-    df.sort_values("improvement(RMSE)", inplace=True, ascending=False)
+    
+    if base_features is not None:
+        baseline_rmse = df[df["features"].apply(lambda x: x == base_features)]["RMSE"].values[0]
+        df["improvement(RMSE)"] = (baseline_rmse - df["RMSE"]) / baseline_rmse * 100
+        df.sort_values("improvement(RMSE)", inplace=True, ascending=False)
 
     return df
-
-
-if __name__ == "__main__":
-
-    inference_df = get_inference_df(
-        [22], ground_truth_resolutions=["1h"], split="eval", forecasting_hours=8
-    )

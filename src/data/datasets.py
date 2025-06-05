@@ -28,34 +28,30 @@ class BaseWindDataset:
         self.step_size_x = get_time_steps(resolution)
         self.step_size_y = get_time_steps("1h")
 
-        self.idxs = load_indices(split)["index"].values
-        self.look_back_rows = get_time_steps(f"{look_back_hours}h")
+        self.idxs = load_indices(split)["valid_indices"].values
+        self.traversed_look_back_rows = get_time_steps(f"{look_back_hours}h")
         self.forecasting_rows = get_time_steps(f"{forecasting_horizon_hours}h")
         self.look_back_steps = get_time_steps(f"{look_back_hours}h", resolution=resolution)
 
         self.x_station_data, self.x_global_data, self.y_data = self._load_data(
-            resolution,
             station_features,
             station_ids,
             global_features,
-            use_globally_scaled=use_global_scaling,
+            use_global_scaling,
         )
 
-    def _load_data(
-        self, resolution, station_features, station_ids, global_features, use_globally_scaled
-    ):
-        x_data = load_dataset(
-            processed=True, is_global_scaled=use_globally_scaled, resolution=resolution
-        )
-        y_data = load_dataset(processed=True, is_global_scaled=use_globally_scaled, resolution="1h")
+    def _load_data(self, station_features, station_ids, global_features, use_globally_scaled):
+        dataset = load_dataset(processed=True, is_global_scaled=use_globally_scaled)
+
         x_station_cols = [
             f"{feature}_{station_id}" for feature in station_features for station_id in station_ids
         ]
-        x_station_data = x_data[x_station_cols]
+        x_station_data = dataset[x_station_cols]
+        x_global_data = (
+            dataset[global_features].values if global_features else np.empty((len(dataset), 0))
+        )
 
-        x_global_data = x_data[global_features].values if global_features else np.empty((0,))
-
-        y_data = y_data[f"wind_speed_{c.REFERENCE_STATION_ID}"].values
+        y_data = dataset[f"target"].values
 
         return x_station_data, x_global_data, y_data
 
@@ -90,8 +86,8 @@ class WindDataset(BaseWindDataset, Dataset):
         return len(self.idxs)
 
     def __getitem__(self, index):
-        look_back_start = self.idxs[index]
-        look_back_end = look_back_start + self.look_back_rows
+        look_back_end = self.idxs[index] + 1
+        look_back_start = look_back_end - self.traversed_look_back_rows
 
         x_station = self.x_station_data[look_back_start : look_back_end : self.step_size_x]
         x_station_tensor = torch.tensor(x_station, dtype=torch.float)
@@ -160,8 +156,8 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         return len(self.idxs)
 
     def get(self, index):
-        look_back_start = self.idxs[index]
-        look_back_end = look_back_start + self.look_back_rows
+        look_back_end = self.idxs[index] + 1
+        look_back_start = look_back_end - self.traversed_look_back_rows
 
         x_station = self.x_station_data[look_back_start : look_back_end : self.step_size_x]
         x_station = x_station.reshape(
@@ -210,7 +206,7 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         coords = self._load_station_coords(station_ids)
         dist_matr = torch.from_numpy(
             haversine_vector(coords, coords, unit=Unit.KILOMETERS, comb=True)
-        )
+        ).float()
 
         return dist_matr
 
@@ -222,17 +218,15 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         return float(sigma)
 
     def _calculate_similarity_matr(self, station_ids, weighting):
-        train_1h_res_df = pd.read_csv("data/processed/1hres/train.csv")
-        train_1h_res_df = train_1h_res_df[
-            [f"wind_speed_{station_id}" for station_id in station_ids]
-        ]
+        train_df = load_dataset(processed=True)
+        train_df = train_df[[f"wind_speed_{station_id}" for station_id in station_ids]]
 
         if "pearson" in weighting:
-            corr = train_1h_res_df.corr(method="pearson").values
+            corr = train_df.corr(method="pearson").values
         elif "spearman" in weighting:
-            corr = train_1h_res_df.corr(method="spearman").values
+            corr = train_df.corr(method="spearman").values
         elif "cos" in weighting:
-            X = train_1h_res_df.values.astype(float)
+            X = train_df.values.astype(float)
             norms = np.linalg.norm(X, axis=0)
             norms[norms == 0] = 1.0
             dotprods = X.T @ X
@@ -302,7 +296,7 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         dst = torch.tensor(dst, dtype=torch.long)
 
         all_src, all_dst = [], []
-        for t in range(self.look_back_rows):
+        for t in range(self.look_back_steps):
             offset = t * self.num_stations
             all_src.append(src + offset)
             all_dst.append(dst + offset)

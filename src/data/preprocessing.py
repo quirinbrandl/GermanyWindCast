@@ -1,10 +1,12 @@
-import pandas as pd
-import numpy as np
 from pathlib import Path
-import utils.constants as c
-from sklearn.preprocessing import StandardScaler
+
 import joblib
-from utils.data_utils import load_dataset, get_time_steps
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+
+import utils.constants as c
+from utils.data_utils import get_time_steps, load_dataset
 
 
 def remove_leading_trailing_nans(df):
@@ -20,26 +22,21 @@ def remove_leading_trailing_nans(df):
 
 def compute_valid_idxs(df, max_look_back_steps, max_forecasting_steps):
     """
-    Generate starting indices of all look back windows that itself
+    Generate inclusive ending indices of all look back windows that itself
     and their forecasting horizon do not cotain NaNs.
     """
-    has_nan = df.isna().any(axis=1)
+
     total_window_size = max_forecasting_steps + max_look_back_steps
+    clean_window = (
+        df.isna()
+        .any(axis=1)
+        .rolling(total_window_size, min_periods=total_window_size)
+        .sum()
+        .eq(0)
+    )
+    end_mask = clean_window.shift(-max_forecasting_steps, fill_value=False)
 
-    window_has_nan = has_nan.rolling(window=total_window_size).sum().gt(0)
-    window_has_nan = align_window_at_start(window_has_nan, total_window_size, fill_value=True)
-
-    last_valid_idx = len(df) - total_window_size + 1
-    valid_mask = ~window_has_nan.iloc[:last_valid_idx]
-
-    return np.flatnonzero(valid_mask)
-
-
-def align_window_at_start(df, window_size, fill_value=None):
-    if fill_value is None:
-        return df.shift(-(window_size - 1))
-    else:
-        return df.shift(-(window_size - 1), fill_value=fill_value)
+    return np.flatnonzero(end_mask)
 
 
 def split_idxs(idxs, train_ratio, eval_ratio, max_look_back_steps, max_forecasting_steps):
@@ -65,25 +62,33 @@ def split_idxs(idxs, train_ratio, eval_ratio, max_look_back_steps, max_forecasti
 
 
 def save_idxs(train_idxs, eval_idxs, test_idxs, output_dir):
-    pd.Series(train_idxs).to_csv(output_dir / "train_indices.csv", index=False, header=["index"])
-    pd.Series(eval_idxs).to_csv(output_dir / "eval_indices.csv", index=False, header=["index"])
-    pd.Series(test_idxs).to_csv(output_dir / "test_indices.csv", index=False, header=["index"])
+    pd.Series(train_idxs).to_csv(
+        output_dir / "train_indices.csv", index=False, header=["valid_indices"]
+    )
+    pd.Series(eval_idxs).to_csv(
+        output_dir / "eval_indices.csv", index=False, header=["valid_indices"]
+    )
+    pd.Series(test_idxs).to_csv(
+        output_dir / "test_indices.csv", index=False, header=["valid_indices"]
+    )
 
 
 def add_temporal_features(df):
-    """Add hour of day and day of year features."""
+    """Add temporal features with 1 year, 1 day and 34 day periodicity."""
 
     df_temporal = df.copy()
 
-    hours = df_temporal.index.hour
-    df_temporal["hour_sin"] = np.sin(2 * np.pi * hours / 24)
-    df_temporal["hour_cos"] = np.cos(2 * np.pi * hours / 24)
+    tsec = df.index.view("int64") / 1e9
+    sec_1d = 60**2 * 24
 
-    days = df_temporal.index.dayofyear
-    df_temporal["day_sin"] = np.sin(
-        2 * np.pi * days / 365.25  # 365.25 days to account for leap years
-    )
-    df_temporal["day_cos"] = np.cos(2 * np.pi * days / 365.25)
+    df_temporal["sin_1y"] = np.sin((2 * np.pi * tsec) / (365.25 * sec_1d)) ## account for leap years
+    df_temporal["cos_1y"] = np.cos((2 * np.pi * tsec) / (365.25 * sec_1d))
+
+    df_temporal["sin_34d"] = np.sin((2 * np.pi * tsec) / (34.7 * sec_1d))
+    df_temporal["cos_34d"] = np.cos((2 * np.pi * tsec) / (34.7 * sec_1d))
+
+    df_temporal["sin_1d"] = np.sin((2 * np.pi * tsec) / 86400)
+    df_temporal["cos_1d"] = np.cos((2 * np.pi * tsec) / 86400)
 
     return df_temporal
 
@@ -149,13 +154,14 @@ def scale_features_locally(df, eval_start_idx):
     return df_scaled, scaler_dict
 
 
-def precompute_rolling_mean(df, resolution):
+def precompute_rolling_mean_targets(df, target_resolution):
     df_rolling_mean = df.copy()
 
-    window_size = get_time_steps(resolution)
-    df_rolling_mean = df.rolling(window_size).mean()
-    df_rolling_mean = align_window_at_start(df_rolling_mean, window_size)
+    window_size = get_time_steps(target_resolution)
+    rolling_mean = df[f"wind_speed_{c.REFERENCE_STATION_ID}"].rolling(window_size).mean()
+    rolling_mean = rolling_mean.shift(-(window_size - 1))
 
+    df_rolling_mean["target"] = rolling_mean
     return df_rolling_mean
 
 
@@ -208,18 +214,19 @@ def main():
 
     print(summary)
 
-    print("Precomputing rolling means for different resolutions and save them...")
-    resolutions = ["10min", "20min", "30min", "1h"]
+    print("Precomputing rolling mean for targets...")
+    dataset_gl_scaled_with_targets = precompute_rolling_mean_targets(dataset_gl_scaled, "1h")
+    dataset_lc_scaled_with_targets = precompute_rolling_mean_targets(dataset_lc_scaled, "1h")
+
+    print("Save results...")
     output_dir = Path(f"data/processed/")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    for res in resolutions:
-        res_dir = output_dir / res
-        res_dir.mkdir(parents=True, exist_ok=True)
-        precompute_rolling_mean(dataset_gl_scaled, res).to_csv(res_dir / "dataset_gl_scaled.csv")
-        precompute_rolling_mean(dataset_lc_scaled, res).to_csv(res_dir / "dataset_lc_scaled.csv")
+    dataset_gl_scaled_with_targets.to_csv(output_dir / "dataset_gl_scaled.csv")
+    dataset_lc_scaled_with_targets.to_csv(output_dir / "dataset_lc_scaled.csv")
 
-    print("Save indices and scalers...")
     save_idxs(train_idxs, eval_idxs, test_idxs, output_dir)
+
     joblib.dump(global_scalers, output_dir / "global_scalers.pkl")
     joblib.dump(local_scalers, output_dir / "local_scalers.pkl")
 

@@ -2,10 +2,10 @@ import pandas as pd
 from pathlib import Path
 
 
-def load_dataset(processed=False, is_global_scaled=None, resolution=None):
+def load_dataset(processed=False, is_global_scaled=None):
     dir = "processed" if processed else "raw"
     if processed:
-        dir = f"processed/{resolution}"
+        dir = f"processed/"
         name = "dataset_gl_scaled.csv" if is_global_scaled else "dataset_lc_scaled.csv"
     else:
         dir = "raw"

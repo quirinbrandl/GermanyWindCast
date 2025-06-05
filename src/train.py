@@ -18,6 +18,8 @@ from utils.model_utils import (
     load_hyperparameters,
     save_hyperparameters,
     is_model_spatial,
+    get_base_run_dir,
+    calculate_next_run_id,
 )
 
 
@@ -31,11 +33,12 @@ def set_seed(seed):
 
 
 def init_run_directory(hyperparameters, general_config):
-    base_run_directory = Path(f"runs/{general_config["forecasting_hours"]}_hour_forecasting")
+    forecasting_hours = general_config["forecasting_hours"]
+    
+    base_run_directory = get_base_run_dir(forecasting_hours)
     base_run_directory.mkdir(exist_ok=True)
 
-    existing_run_ids = [int(run.name) for run in base_run_directory.iterdir() if run.name.isdigit()]
-    next_id = max(existing_run_ids) + 1 if existing_run_ids else 0
+    next_id = calculate_next_run_id(forecasting_hours)
 
     run_directory = base_run_directory / str(next_id)
     run_directory.mkdir(parents=True, exist_ok=True)
@@ -254,7 +257,7 @@ def execute_training_pipeline(general_config, hyperparameters):
         is_spatial=is_model_spatial(model),
         weighting=hyperparameters.get("weighting"),
         knns=hyperparameters.get("knns"),
-        use_global_scaling=hyperparameters["use_global_scaling"]
+        use_global_scaling=hyperparameters["use_global_scaling"],
     )
     print_model_information(model, train_loader, device)
 
@@ -280,7 +283,9 @@ def execute_training_pipeline(general_config, hyperparameters):
         log_run_summary_epochs(use_wandb, stopped_epoch, best_epoch)
         model.load_state_dict(best_model_state)
 
-    mse, mae = evaluate_final_model(model, val_loader, device, hyperparameters["use_global_scaling"])
+    mse, mae = evaluate_final_model(
+        model, val_loader, device, hyperparameters["use_global_scaling"]
+    )
     rmse = np.sqrt(mse)
     log_run_summary_errors(use_wandb, mse, rmse, mae)
     save_model(model, run_directory, use_wandb, run_id)
