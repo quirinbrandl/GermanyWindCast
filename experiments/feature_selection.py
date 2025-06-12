@@ -21,16 +21,18 @@ def run_training_with_features(station_features, global_features):
     subprocess.run([sys.executable, "src/train.py"])
 
 
-def run_feature_selection(station_features_to_test, global_features_to_test):
+def run_feature_selection(
+    baseline_station_features, station_features_to_test, global_features_to_test
+):
 
     forecasting_hours = load_general_config()["forecasting_hours"]
     next_run_id = calculate_next_run_id(forecasting_hours)
     last_round_best_rmse = float("inf")
 
     curr_round_best_rmse, curr_round_best_station_features, curr_round_best_global_features = (
-        perform_base_line_run(forecasting_hours, next_run_id)
+        perform_base_line_run(baseline_station_features, forecasting_hours, next_run_id)
     )
-    next_run_id +=1
+    next_run_id += 1
 
     while curr_round_best_rmse < last_round_best_rmse:
         remaining_station_features_to_test = get_remaining_features(
@@ -91,8 +93,7 @@ def run_station_feature_selection(
     return run_ids, next_run_id
 
 
-def perform_base_line_run(forecasting_hours, next_run_id):
-    baseline_station_features = ["wind_speed"]
+def perform_base_line_run(baseline_station_features, forecasting_hours, next_run_id):
     baseline_global_features = []
     baseline_run_id = next_run_id
 
@@ -125,12 +126,14 @@ if __name__ == "__main__":
         ["relative_humidity"],
         ["air_pressure"],
         ["dew_point"],
-        ["wind_direction_sin", "wind_direction_cos"],
     ]
 
     global_features_to_test = [
-        ["hour_cos", "hour_sin"],
-        ["day_sin", "day_cos"],
+        ["sin_1y", "cos_1y"],
+        ["sin_1d", "cos_1d"],
+        ["sin_34d", "cos_34d"],
     ]
 
-    run_feature_selection(features_to_test, global_features_to_test)
+    baseline_station_features = ["wind_speed", "wind_direction_sin", "wind_direction_cos"]
+
+    run_feature_selection(baseline_station_features, features_to_test, global_features_to_test)

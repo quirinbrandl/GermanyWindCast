@@ -84,9 +84,6 @@ def add_temporal_features(df):
     df_temporal["sin_1y"] = np.sin((2 * np.pi * tsec) / (365.25 * sec_1d)) ## account for leap years
     df_temporal["cos_1y"] = np.cos((2 * np.pi * tsec) / (365.25 * sec_1d))
 
-    df_temporal["sin_34d"] = np.sin((2 * np.pi * tsec) / (34.7 * sec_1d))
-    df_temporal["cos_34d"] = np.cos((2 * np.pi * tsec) / (34.7 * sec_1d))
-
     df_temporal["sin_1d"] = np.sin((2 * np.pi * tsec) / 86400)
     df_temporal["cos_1d"] = np.cos((2 * np.pi * tsec) / 86400)
 

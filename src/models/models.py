@@ -7,7 +7,6 @@ import utils.constants as c
 
 
 class PersistenceModel(nn.Module):
-    """Simple persistence model that predicts the last value observed."""
 
     def __init__(self, forecasting_hours, station_ids, station_features):
         super(PersistenceModel, self).__init__()
@@ -18,7 +17,7 @@ class PersistenceModel(nn.Module):
         self.num_features = len(station_features)
 
     def forward(self, x_tensor):
-        last_observed_at_ref_station = x_tensor[:, -1, (self.reference_station_idx + 1) * self.wind_speed_idx]
+        last_observed_at_ref_station = x_tensor[:, -1, self.wind_speed_idx * self.num_stations + self.reference_station_idx]
         return last_observed_at_ref_station.unsqueeze(1).repeat(1, self.forecasting_hours)
 
 
