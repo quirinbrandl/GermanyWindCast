@@ -23,20 +23,27 @@ def remove_leading_trailing_nans(df):
 def compute_valid_idxs(df, max_look_back_steps, max_forecasting_steps):
     """
     Generate inclusive ending indices of all look back windows that itself
-    and their forecasting horizon do not cotain NaNs.
+    and their forecasting horizon do not contain NaNs.
     """
-
-    total_window_size = max_forecasting_steps + max_look_back_steps
-    clean_window = (
+    look_back_clean = (
         df.isna()
         .any(axis=1)
-        .rolling(total_window_size, min_periods=total_window_size)
+        .rolling(max_look_back_steps, min_periods=max_look_back_steps)
         .sum()
         .eq(0)
     )
-    end_mask = clean_window.shift(-max_forecasting_steps, fill_value=False)
 
-    return np.flatnonzero(end_mask)
+    horizon_clean = (
+        df[f"wind_speed_{c.REFERENCE_STATION_ID}"]
+        .isna()
+        .rolling(max_forecasting_steps, min_periods=max_forecasting_steps)
+        .sum()
+        .eq(0)
+        .shift(-max_forecasting_steps, fill_value=False)
+    )
+    valid_mask = look_back_clean & horizon_clean
+
+    return np.flatnonzero(valid_mask)
 
 
 def split_idxs(idxs, train_ratio, eval_ratio, max_look_back_steps, max_forecasting_steps):
@@ -74,14 +81,16 @@ def save_idxs(train_idxs, eval_idxs, test_idxs, output_dir):
 
 
 def add_temporal_features(df):
-    """Add temporal features with 1 year, 1 day and 34 day periodicity."""
+    """Add temporal features with 1 year and 1 day periodicity."""
 
     df_temporal = df.copy()
 
     tsec = df.index.view("int64") / 1e9
     sec_1d = 60**2 * 24
 
-    df_temporal["sin_1y"] = np.sin((2 * np.pi * tsec) / (365.25 * sec_1d)) ## account for leap years
+    df_temporal["sin_1y"] = np.sin(
+        (2 * np.pi * tsec) / (365.25 * sec_1d)
+    )  ## account for leap years
     df_temporal["cos_1y"] = np.cos((2 * np.pi * tsec) / (365.25 * sec_1d))
 
     df_temporal["sin_1d"] = np.sin((2 * np.pi * tsec) / 86400)
@@ -192,8 +201,9 @@ def main():
     )
 
     print("Normalizing features...")
-    dataset_gl_scaled, global_scalers = scale_features_globally(dataset, eval_idxs[0])
-    dataset_lc_scaled, local_scalers = scale_features_locally(dataset, eval_idxs[0])
+    eval_start_idx = eval_idxs[0] - max_look_back_steps + 1
+    dataset_gl_scaled, global_scalers = scale_features_globally(dataset, eval_start_idx)
+    dataset_lc_scaled, local_scalers = scale_features_locally(dataset, eval_start_idx)
 
     idx_lengths = [len(idxs) for idxs in [train_idxs, eval_idxs, test_idxs]]
     total_size = sum(idx_lengths)
@@ -202,11 +212,18 @@ def main():
         (idx_length / total_size) * 100 for idx_length in idx_lengths
     ]
 
+    start_train = dataset.index[train_idxs[0]]
+    end_train = dataset.index[train_idxs[-1]]
+    start_eval = dataset.index[eval_idxs[0]]
+    end_eval = dataset.index[eval_idxs[-1]]
+    start_test = dataset.index[test_idxs[0]]
+    end_test = dataset.index[test_idxs[-1]]
+
     summary = (
         f"In total, there are {total_size} used starting indices for a look-back window.\n"
-        f"- {train_size} ({train_percent:.2f}%) in the training set\n"
-        f"- {eval_size} ({eval_percent:.2f}%) in the evaluation set\n"
-        f"- {test_size} ({test_percent:.2f}%) in the test set."
+        f"- {train_size} ({train_percent:.2f}%) in the training set (time period: {start_train} - {end_train}\n"
+        f"- {eval_size} ({eval_percent:.2f}%) in the evaluation set (time period: {start_eval} - {end_eval}\n"
+        f"- {test_size} ({test_percent:.2f}%) in the test set (time period: {start_test} - {end_test}."
     )
 
     print(summary)
