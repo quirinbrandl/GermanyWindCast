@@ -1,0 +1,14 @@
+dense_hidden_size: 64
+global_features:
+- sin_1y
+- cos_1y
+look_back_hours: 1
+model: mlp
+num_hidden_dense_layers: 2
+resolution: 10min
+station_features:
+- wind_speed
+- wind_direction_sin
+- wind_direction_cos
+- air_pressure
+- air_temperature

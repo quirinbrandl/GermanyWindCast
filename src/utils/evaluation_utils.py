@@ -116,34 +116,46 @@ def calculate_predictions_time_range(split, look_back_hours):
     return predictions_time_range
 
 
-def get_feature_selection_results(rund_ids, forecasting_hours, wandb_api, base_features=None):
+def get_feature_selection_results(run_ids, forecasting_hours, wandb_api, base_features=None):
     general_config = load_general_config()
-
-    run_names = [f"{forecasting_hours}_hour_forecasting_run_{id}" for id in rund_ids]
+    run_names = [
+        f"{forecasting_hours}_hour_forecasting_run_{id}"
+        for id in run_ids
+    ]
     runs = wandb_api.runs(
-        path=f"{general_config["wandb_entity"]}/{general_config["wandb_project"]}",
+        path=f"{general_config['wandb_entity']}/{general_config['wandb_project']}",
         filters={"display_name": {"$in": run_names}},
     )
-
-    data = {"station_features": [], "global_features": [], "RMSE": [], "MAE": []}
+    records = []
 
     for run in runs:
         rmse = run.summary.get("best_model_val_rmse_original_domain")
-        mae = run.summary.get("best_model_val_mae_original_domain")
+        station_features = run.config.get("station_features") or []
+        global_features = run.config.get("global_features") or []
 
-        station_features = run.config.get("station_features")
-        global_features = run.config.get("global_features")
+        records.append({
+            "run_name": run.name,
+            "station_features": tuple(sorted(station_features)),
+            "global_features": tuple(sorted(global_features)),
+            "RMSE": rmse,
+        })
 
-        data["RMSE"].append(rmse)
-        data["MAE"].append(mae)
-        data["station_features"].append(station_features)
-        data["global_features"].append(global_features)
+    df = pd.DataFrame(records)
+    df["round"] = df["run_name"].apply(
+        lambda name: run_names.index(name) if name in run_names else -1
+    )
+    df = df[df["round"] >= 0]
+    df = df.sort_values("round")
 
-    df = pd.DataFrame(data)
-    
-    if base_features is not None:
-        baseline_rmse = df[df["features"].apply(lambda x: x == base_features)]["RMSE"].values[0]
-        df["improvement(RMSE)"] = (baseline_rmse - df["RMSE"]) / baseline_rmse * 100
-        df.sort_values("improvement(RMSE)", inplace=True, ascending=False)
+    winners = df.groupby("round").apply(lambda g: g.nsmallest(1, "RMSE")).reset_index(drop=True)
 
-    return df
+    winners["improvement_over_last(%)"] = winners["RMSE"].shift(1) - winners["RMSE"]
+    winners["improvement_over_last(%)"] = (
+        winners["improvement_over_last(%)"] / winners["RMSE"].shift(1) * 100
+    ).round(2)
+
+    winners["station_features"] = winners["station_features"].apply(lambda x: list(x) if x else [])
+    winners["global_features"] = winners["global_features"].apply(lambda x: list(x) if x else [])
+
+    return winners.reset_index(drop=True)
+

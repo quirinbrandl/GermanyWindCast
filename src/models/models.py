@@ -1,9 +1,10 @@
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import GCN, GAT
+from torch_geometric.nn import GAT, GCN
+
 import utils.constants as c
+from utils.data_utils import get_time_steps
 
 
 class PersistenceModel(nn.Module):
@@ -17,7 +18,9 @@ class PersistenceModel(nn.Module):
         self.num_features = len(station_features)
 
     def forward(self, x_tensor):
-        last_observed_at_ref_station = x_tensor[:, -1, self.wind_speed_idx * self.num_stations + self.reference_station_idx]
+        last_observed_at_ref_station = x_tensor[
+            :, -1, self.wind_speed_idx * self.num_stations + self.reference_station_idx
+        ]
         return last_observed_at_ref_station.unsqueeze(1).repeat(1, self.forecasting_hours)
 
 
@@ -40,8 +43,8 @@ class MLP(BaseModel):
         station_ids,
         station_features,
         global_features,
-        num_hidden_layers,
-        hidden_size,
+        num_hidden_dense_layers,
+        dense_hidden_size,
         dropout_rate,
         resolution,
     ):
@@ -53,15 +56,15 @@ class MLP(BaseModel):
         ) * look_back_window
 
         layers = []
-        for _ in range(num_hidden_layers):
-            layers.append(nn.Linear(input_size, hidden_size))
+        for _ in range(num_hidden_dense_layers):
+            layers.append(nn.Linear(input_size, dense_hidden_size))
             layers.append(nn.ReLU())
             if dropout_rate > 0:
                 layers.append(nn.Dropout(dropout_rate))
 
-            input_size = hidden_size
+            input_size = dense_hidden_size
 
-        layers.append(nn.Linear(hidden_size, forecasting_hours))
+        layers.append(nn.Linear(dense_hidden_size, forecasting_hours))
 
         self.net = nn.Sequential(*layers)
 
@@ -72,33 +75,49 @@ class MLP(BaseModel):
         return self.net(x_station_flat)
 
 
-class RNN(BaseModel):
+class WindLSTM(BaseModel):
     def __init__(
         self,
         forecasting_hours,
         station_ids,
         station_features,
         global_features,
-        num_lstm_layers,
-        hidden_size,
+        num_hidden_lstm_layers,
+        num_hidden_dense_layers,
+        lstm_hidden_size,
+        dense_hidden_size,
         dropout_rate,
     ):
-        super(RNN, self).__init__(forecasting_hours, station_ids, station_features, global_features)
+        super(WindLSTM, self).__init__(forecasting_hours, station_ids, station_features, global_features)
 
         self.lstm = nn.LSTM(
             input_size=len(station_ids) * len(station_features) + self.num_global_features,
-            hidden_size=hidden_size,
-            num_layers=num_lstm_layers,
+            hidden_size=lstm_hidden_size,
+            num_layers=num_hidden_lstm_layers,
             dropout=dropout_rate,
             batch_first=True,
         )
 
-        self.fc = nn.Linear(hidden_size, forecasting_hours)
+        dense_input_size = lstm_hidden_size
+        dense_layers = []
+        for _ in range(num_hidden_dense_layers):
+            dense_layers.append(nn.Linear(dense_input_size, dense_hidden_size))
+            dense_layers.append(nn.ReLU())
+            if dropout_rate > 0:
+                dense_layers.append(nn.Dropout(dropout_rate))
+            dense_input_size = dense_hidden_size
+
+        dense_layers.append(
+            nn.Linear(
+                dense_hidden_size if len(dense_layers) > 0 else lstm_hidden_size, forecasting_hours
+            )
+        )
+        self.mlp_head = nn.Sequential(*dense_layers)
 
     def forward(self, x):
         lstm_output, _ = self.lstm(x)
         lstm_most_recent = lstm_output[:, -1, :]
-        predictions = self.fc(lstm_most_recent)
+        predictions = self.mlp_head(lstm_most_recent)
 
         return predictions
 
@@ -146,9 +165,9 @@ class WindGCN(BaseGNNModel):
     def __init__(
         self,
         hidden_channels,
-        linear_hidden_size,
-        num_gcn_layers,
-        num_linear_layers,
+        dense_hidden_size,
+        num_hidden_gcn_layers,
+        num_hidden_dense_layers,
         dropout_rate,
         station_features,
         station_ids,
@@ -164,25 +183,28 @@ class WindGCN(BaseGNNModel):
             station_features,
             global_features,
             hidden_channels,
-            dropout_rate,
             resolution,
             look_back_hours,
             use_residual,
         )
 
-        self.gcn = GCN(hidden_channels, hidden_channels, num_gcn_layers, dropout=dropout_rate)
+        self.gcn = GCN(hidden_channels, hidden_channels, num_hidden_gcn_layers, dropout=dropout_rate)
 
         mlp_head_layers = []
-        input_size = hidden_channels + self.num_global_features
+        
+        look_back_steps = get_time_steps(f"{look_back_hours}h", resolution=resolution)
+        input_size = (
+            (hidden_channels + self.num_global_features) * look_back_steps
+        )
 
-        for _ in range(num_linear_layers):
-            mlp_head_layers.append(nn.Linear(input_size, linear_hidden_size))
+        for _ in range(num_hidden_dense_layers):
+            mlp_head_layers.append(nn.Linear(input_size, dense_hidden_size))
             mlp_head_layers.append(nn.ReLU())
             if dropout_rate > 0:
                 mlp_head_layers.append(nn.Dropout(dropout_rate))
 
-            input_size = linear_hidden_size
-        mlp_head_layers.append(nn.Linear(linear_hidden_size, forecasting_hours))
+            input_size = dense_hidden_size
+        mlp_head_layers.append(nn.Linear(dense_hidden_size, forecasting_hours))
         self.mlp_head = nn.Sequential(*mlp_head_layers)
 
     def forward(self, data):
@@ -208,7 +230,7 @@ class WindGCN(BaseGNNModel):
         return predictions
 
 
-class BaseGNNRNN(BaseGNNModel):
+class BaseGNNLSTM(BaseGNNModel):
     def __init__(
         self,
         forecasting_hours,
@@ -220,10 +242,12 @@ class BaseGNNRNN(BaseGNNModel):
         resolution,
         look_back_hours,
         use_residual,
-        num_lstm_layers,
+        num_hidden_lstm_layers,
         lstm_hidden_size,
+        num_hidden_dense_layers,
+        dense_hidden_size,
     ):
-        super(BaseGNNRNN, self).__init__(
+        super(BaseGNNLSTM, self).__init__(
             forecasting_hours,
             station_ids,
             station_features,
@@ -237,11 +261,25 @@ class BaseGNNRNN(BaseGNNModel):
         self.lstm = nn.LSTM(
             hidden_channels + self.num_global_features,
             lstm_hidden_size,
-            num_lstm_layers,
+            num_hidden_lstm_layers,
             batch_first=True,
             dropout=dropout_rate,
         )
-        self.fc = nn.Linear(lstm_hidden_size, forecasting_hours)
+
+
+        mlp_head_layers = []
+        
+        input_size = lstm_hidden_size
+
+        for _ in range(num_hidden_dense_layers):
+            mlp_head_layers.append(nn.Linear(input_size, dense_hidden_size))
+            mlp_head_layers.append(nn.ReLU())
+            if dropout_rate > 0:
+                mlp_head_layers.append(nn.Dropout(dropout_rate))
+
+            input_size = dense_hidden_size
+        mlp_head_layers.append(nn.Linear(dense_hidden_size if len(mlp_head_layers) > 0 else input_size, forecasting_hours))
+        self.mlp_head = nn.Sequential(*mlp_head_layers)
 
     def forward(self, data):
         batch_size = data.num_graphs
@@ -261,18 +299,18 @@ class BaseGNNRNN(BaseGNNModel):
         lstm_output, _ = self.lstm(lstm_input)
         lstm_most_recent = lstm_output[:, -1, :]
 
-        predictions = self.fc(lstm_most_recent)
+        predictions = self.mlp_head(lstm_most_recent)
         return predictions
 
     def apply_gnn(self, x_station_embedded, edge_index, weights):
         raise NotImplementedError("Subclasses must implement this method")
 
 
-class GCNRNN(BaseGNNRNN):
+class GCNLSTM(BaseGNNLSTM):
     def __init__(
         self,
         hidden_channels,
-        num_gcn_layers,
+        num_hidden_gcn_layers,
         dropout_rate,
         station_features,
         station_ids,
@@ -280,11 +318,13 @@ class GCNRNN(BaseGNNRNN):
         resolution,
         look_back_hours,
         forecasting_hours,
-        num_lstm_layers,
+        num_hidden_lstm_layers,
         lstm_hidden_size,
         use_residual,
+        num_hidden_dense_layers,
+        dense_hidden_size,
     ):
-        super(GCNRNN, self).__init__(
+        super(GCNLSTM, self).__init__(
             forecasting_hours,
             station_ids,
             station_features,
@@ -294,23 +334,25 @@ class GCNRNN(BaseGNNRNN):
             resolution,
             look_back_hours,
             use_residual,
-            num_lstm_layers,
+            num_hidden_lstm_layers,
             lstm_hidden_size,
+            num_hidden_dense_layers,
+            dense_hidden_size,
         )
 
-        self.gcn = GCN(hidden_channels, hidden_channels, num_gcn_layers, dropout=dropout_rate)
+        self.gcn = GCN(hidden_channels, hidden_channels, num_hidden_gcn_layers, dropout=dropout_rate)
 
     def apply_gnn(self, x_station_embedded, edge_index, weights):
         return self.gcn(x_station_embedded, edge_index, edge_weight=weights)
 
 
-class GATRNN(BaseGNNRNN):
+class GATLSTM(BaseGNNLSTM):
     def __init__(
         self,
         hidden_channels,
         lstm_hidden_size,
         use_residual,
-        num_gat_layers,
+        num_hidden_gat_layers,
         dropout_rate,
         station_features,
         station_ids,
@@ -318,10 +360,10 @@ class GATRNN(BaseGNNRNN):
         resolution,
         look_back_hours,
         forecasting_hours,
-        num_lstm_layers,
+        num_hidden_lstm_layers,
         heads,
     ):
-        super(GATRNN, self).__init__(
+        super(GATLSTM, self).__init__(
             forecasting_hours,
             station_ids,
             station_features,
@@ -331,7 +373,7 @@ class GATRNN(BaseGNNRNN):
             resolution,
             look_back_hours,
             use_residual,
-            num_lstm_layers,
+            num_hidden_lstm_layers,
             lstm_hidden_size,
         )
 
@@ -339,8 +381,7 @@ class GATRNN(BaseGNNRNN):
         self.gat = GAT(
             hidden_channels,
             hidden_channels,
-            num_gat_layers,
-            v2=True,
+            num_hidden_gat_layers,
             dropout=dropout_rate,
             heads=heads,
         )

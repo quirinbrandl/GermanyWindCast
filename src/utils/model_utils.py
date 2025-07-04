@@ -1,5 +1,5 @@
 import pandas as pd
-from models.models import PersistenceModel, MLP, RNN, WindGCN, GCNRNN, GATRNN
+from models.models import PersistenceModel, MLP, WindLSTM, WindGCN, GCNLSTM, GATLSTM
 from pathlib import Path
 import yaml
 import torch
@@ -47,19 +47,21 @@ def create_model(hyperparameters, forecasting_hours):
             station_ids=hyperparameters["station_ids"],
             station_features=hyperparameters["station_features"],
             global_features=hyperparameters["global_features"],
-            num_hidden_layers=hyperparameters["num_hidden_layers"],
-            hidden_size=hyperparameters["hidden_size"],
+            num_hidden_dense_layers=hyperparameters["num_hidden_dense_layers"],
+            dense_hidden_size=hyperparameters["dense_hidden_size"],
             dropout_rate=hyperparameters["dropout_rate"],
             resolution=hyperparameters["resolution"],
         )
-    elif model_architecture == "rnn":
-        return RNN(
+    elif model_architecture == "lstm":
+        return WindLSTM(
             forecasting_hours=forecasting_hours,
             station_ids=hyperparameters["station_ids"],
             station_features=hyperparameters["station_features"],
             global_features=hyperparameters["global_features"],
-            num_lstm_layers=hyperparameters["num_hidden_layers"],
-            hidden_size=hyperparameters["lstm_hidden_size"],
+            num_hidden_lstm_layers=hyperparameters["num_hidden_lstm_layers"],
+            num_hidden_dense_layers=hyperparameters["num_hidden_dense_layers"],
+            lstm_hidden_size=hyperparameters["lstm_hidden_size"],
+            dense_hidden_size=hyperparameters["dense_hidden_size"],
             dropout_rate=hyperparameters["dropout_rate"],
         )
     elif model_architecture == "gcn":
@@ -73,12 +75,12 @@ def create_model(hyperparameters, forecasting_hours):
             resolution=hyperparameters["resolution"],
             look_back_hours=hyperparameters["look_back_hours"],
             use_residual=hyperparameters["use_residual"],
-            linear_hidden_size=hyperparameters["hidden_size"],
-            num_gcn_layers=hyperparameters["num_gnn_layers"],
-            num_linear_layers=hyperparameters["num_linear_layers"],
+            dense_hidden_size=hyperparameters["dense_hidden_size"],
+            num_hidden_gcn_layers=hyperparameters["num_hidden_gnn_layers"],
+            num_hidden_dense_layers=hyperparameters["num_hidden_dense_layers"],
         )
-    elif model_architecture == "gcn_rnn":
-        return GCNRNN(
+    elif model_architecture == "gcn_lstm":
+        return GCNLSTM(
             forecasting_hours=forecasting_hours,
             station_ids=hyperparameters["station_ids"],
             station_features=hyperparameters["station_features"],
@@ -88,12 +90,14 @@ def create_model(hyperparameters, forecasting_hours):
             resolution=hyperparameters["resolution"],
             look_back_hours=hyperparameters["look_back_hours"],
             use_residual=hyperparameters["use_residual"],
-            num_lstm_layers=hyperparameters["num_lstm_layers"],
+            num_hidden_lstm_layers=hyperparameters["num_hidden_lstm_layers"],
             lstm_hidden_size=hyperparameters["lstm_hidden_size"],
-            num_gcn_layers=hyperparameters["num_gnn_layers"],
+            num_hidden_gcn_layers=hyperparameters["num_hidden_gnn_layers"],
+            num_hidden_dense_layers=hyperparameters["num_hidden_dense_layers"],
+            dense_hidden_size=hyperparameters["dense_hidden_size"],
         )
-    elif model_architecture == "gat_rnn":
-        return GATRNN(
+    elif model_architecture == "gat_lstm":
+        return GATLSTM(
             forecasting_hours=forecasting_hours,
             station_ids=hyperparameters["station_ids"],
             station_features=hyperparameters["station_features"],
@@ -103,9 +107,9 @@ def create_model(hyperparameters, forecasting_hours):
             resolution=hyperparameters["resolution"],
             look_back_hours=hyperparameters["look_back_hours"],
             use_residual=hyperparameters["use_residual"],
-            num_lstm_layers=hyperparameters["num_lstm_layers"],
+            num_hidden_lstm_layers=hyperparameters["num_hidden_lstm_layers"],
             lstm_hidden_size=hyperparameters["lstm_hidden_size"],
-            num_gat_layers=hyperparameters["num_gnn_layers"],
+            num_hidden_gat_layers=hyperparameters["num_hidden_gnn_layers"],
             heads=hyperparameters["heads"],
         )
     else:
@@ -113,7 +117,7 @@ def create_model(hyperparameters, forecasting_hours):
 
 
 def is_model_spatial(model):
-    return isinstance(model, (WindGCN, GCNRNN, GATRNN))
+    return isinstance(model, (WindGCN, GCNLSTM, GCNLSTM))
 
 
 def load_best_model(run_id, forecasting_hours, device):
