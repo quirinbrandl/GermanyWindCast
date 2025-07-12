@@ -46,16 +46,17 @@ MODEL_ARCHS = {
     },
     "gcn": {
         "hidden_channels": 128,
-        "num_hidden_gcn_layers": 2,
+        "num_hidden_gnn_layers": 2,
         "use_residual": True,
         "num_hidden_dense_layers": 2,
         "dense_hidden_size": 32,
     },
     "gcn_lstm": {
         "hidden_channels": 128,
-        "num_hidden_gcn_layers": 2,
+        "num_hidden_gnn_layers": 2,
         "use_residual": True,
         "num_hidden_lstm_layers": 1,
         "lstm_hidden_size": 256,
+        "num_hidden_dense_layers": 0
     },
 }

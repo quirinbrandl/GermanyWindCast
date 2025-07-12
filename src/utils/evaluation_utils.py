@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import joblib
-import matplotlib.pyplot as plt
+import wandb
 import numpy as np
 import pandas as pd
 import torch
@@ -29,7 +29,7 @@ def inverse_scale_batch_tensor(y_batch, use_global_scaler):
     else:
         file_name = "local_scalers.pkl"
         scaler_key = f"wind_speed_{c.REFERENCE_STATION_ID}"
-    
+
     scalers_dict = joblib.load(Path(f"data/processed/{file_name}"))
     scaler = scalers_dict[scaler_key]
 
@@ -118,10 +118,7 @@ def calculate_predictions_time_range(split, look_back_hours):
 
 def get_feature_selection_results(run_ids, forecasting_hours, wandb_api, base_features=None):
     general_config = load_general_config()
-    run_names = [
-        f"{forecasting_hours}_hour_forecasting_run_{id}"
-        for id in run_ids
-    ]
+    run_names = [f"{forecasting_hours}_hour_forecasting_run_{id}" for id in run_ids]
     runs = wandb_api.runs(
         path=f"{general_config['wandb_entity']}/{general_config['wandb_project']}",
         filters={"display_name": {"$in": run_names}},
@@ -133,12 +130,14 @@ def get_feature_selection_results(run_ids, forecasting_hours, wandb_api, base_fe
         station_features = run.config.get("station_features") or []
         global_features = run.config.get("global_features") or []
 
-        records.append({
-            "run_name": run.name,
-            "station_features": tuple(sorted(station_features)),
-            "global_features": tuple(sorted(global_features)),
-            "RMSE": rmse,
-        })
+        records.append(
+            {
+                "run_name": run.name,
+                "station_features": tuple(sorted(station_features)),
+                "global_features": tuple(sorted(global_features)),
+                "RMSE": rmse,
+            }
+        )
 
     df = pd.DataFrame(records)
     df["round"] = df["run_name"].apply(
@@ -159,3 +158,44 @@ def get_feature_selection_results(run_ids, forecasting_hours, wandb_api, base_fe
 
     return winners.reset_index(drop=True)
 
+
+def get_temporal_analysis_results(forecasting_hours_to_run_id_mapping):
+    wandb.login()
+    api = wandb.Api()
+    general_config = load_general_config()
+    wandb_base_path = f"{general_config["wandb_entity"]}/{general_config["wandb_project"]}"
+
+    records = []
+    for forecasting_hours in forecasting_hours_to_run_id_mapping.keys():
+        run_names = [
+            f"{forecasting_hours}_hour_forecasting_run_{run_id}"
+            for run_id in forecasting_hours_to_run_id_mapping[forecasting_hours]
+        ]
+
+        runs = api.runs(path=wandb_base_path, filters={"display_name": {"$in": run_names}})
+        for run in runs:
+            forecasting_hours = run.name.split("_")[0]
+            run_id = run.name.split("_")[-1]
+            rmse = run.summary.get("best_model_val_rmse_original_domain")
+            resolution = run.config.get("resolution")
+            look_back_hours = run.config.get("look_back_hours")
+            model_architecture = run.config.get("model_architecture")
+
+            records.append(
+                {
+                    "forecasting_hours": forecasting_hours,
+                    "run_id": run_id,
+                    "resolution": resolution,
+                    "look_back_hours": look_back_hours,
+                    "model_architecture": model_architecture,
+                    "RMSE": rmse,
+                }
+            )
+
+    df = pd.DataFrame(records)
+    return df
+
+
+def calculate_percentage_improvement(baseline_rmse, model_rmse):
+    return (1 - model_rmse / baseline_rmse) * 100
+    

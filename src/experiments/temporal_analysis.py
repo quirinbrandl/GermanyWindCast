@@ -27,8 +27,9 @@ if __name__ == "__main__":
     wandb.login()
 
     models_to_test = ["gcn_lstm"]
-    resolutions_to_test = ["10min", "20min", "30min", "60min"]
-    look_back_hours_to_test = [2, 3, 4, 5, 6, 7, 9, 10, 11]
+    resolutions_to_test = ["10min"]
+    look_back_hours_to_test = [11]
     forecasting_hours_to_test = [1]
 
     run_temporal_analysis(resolutions_to_test, look_back_hours_to_test, models_to_test, forecasting_hours_to_test)
+      

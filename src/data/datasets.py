@@ -89,14 +89,15 @@ class WindDataset(BaseWindDataset, Dataset):
         look_back_end = self.idxs[index] + 1
         look_back_start = look_back_end - self.traversed_look_back_rows
 
-        x_station = self.x_station_data[look_back_start : look_back_end : self.step_size_x]
-        x_station_tensor = torch.tensor(x_station, dtype=torch.float)
+        offset = (look_back_end - 1 - look_back_start) % self.step_size_x
+        first = look_back_start + offset
+        idxs = slice(first, look_back_end, self.step_size_x)
 
-        x_global = self.x_global_data[look_back_start : look_back_end : self.step_size_x]
-        x_global_tensor = torch.tensor(
-            x_global,
-            dtype=torch.float,
-        )
+        x_station = self.x_station_data[idxs]
+        x_global = self.x_global_data[idxs]
+
+        x_station_tensor = torch.tensor(x_station, dtype=torch.float)
+        x_global_tensor = torch.tensor(x_global, dtype=torch.float)
 
         x_tensor = torch.concat((x_station_tensor, x_global_tensor), dim=1)
 
@@ -159,13 +160,17 @@ class WindDatasetSpatial(BaseWindDataset, GraphDataset):
         look_back_end = self.idxs[index] + 1
         look_back_start = look_back_end - self.traversed_look_back_rows
 
-        x_station = self.x_station_data[look_back_start : look_back_end : self.step_size_x]
+        offset = (look_back_end - 1 - look_back_start) % self.step_size_x
+        first = look_back_start + offset
+        idxs = slice(first, look_back_end, self.step_size_x)
+
+        x_station = self.x_station_data[idxs]
         x_station = x_station.reshape(
             self.look_back_steps * self.num_stations, self.num_station_features
         )
         x_station_tensor = torch.tensor(x_station, dtype=torch.float)
 
-        x_global = self.x_global_data[look_back_start : look_back_end : self.step_size_x]
+        x_global = self.x_global_data[idxs]
         x_global_tensor = torch.tensor(
             x_global,
             dtype=torch.float,

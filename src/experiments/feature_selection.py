@@ -112,9 +112,9 @@ def run_global_feature_selection(
 
     return run_ids, next_run_id
 
-def run_global_feat_ablation_experiments(models, forecasting_hours):
+def run_global_feat_ablation_experiments(models, forecasting_hours_to_test):
     for model in models:
-        for forecasting_hours in forecasting_hours:
+        for forecasting_hours in forecasting_hours_to_test:
             for remove_global_features in [True, False]:
                 hyperparameters = {"model_architecture": model}
                 hyperparameters.update(OPTIMAL_FEATURES[forecasting_hours])
