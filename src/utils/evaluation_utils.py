@@ -198,4 +198,3 @@ def get_temporal_analysis_results(forecasting_hours_to_run_id_mapping):
 
 def calculate_percentage_improvement(baseline_rmse, model_rmse):
     return (1 - model_rmse / baseline_rmse) * 100
-    
