@@ -1,6 +1,8 @@
 import pandas as pd
 from pathlib import Path
 import numpy as np
+import utils.constants as c
+from haversine import haversine_vector
 
 
 def load_dataset(processed=False, is_global_scaled=None):
@@ -48,3 +50,18 @@ def get_stations_in_sec_rel_freq(ref_station, normal_stations, angle_min, angle_
 
     print(f"Stations in interval ({angle_min}°, {angle_max}°]: {count}")
     print(f"Relative frequency: {relative:.2%}")
+
+def load_station_coords(station_ids=c.STATION_IDS):
+        station_data = load_metadata()
+        station_data = station_data.loc[station_ids]
+
+        return list(zip(station_data["geographic_latitude"], station_data["geographic_longitude"]))
+
+
+def find_nearest_stations(num_stations):
+    coords = load_station_coords()
+    distances = haversine_vector(
+        coords[c.STATION_IDS.index(c.REFERENCE_STATION_ID)], coords, comb=True
+    ).reshape(-1)
+    nearest_stations = np.array(c.STATION_IDS)[np.argsort(distances)[:num_stations]].tolist()
+    return nearest_stations

@@ -32,6 +32,23 @@ OPTIMAL_FEATURES = {
     },
 }
 
+# Best found temporal configs for each model architecture and forecast horizon
+OPTIMAL_TEMPORAL_CONFIG = {
+    (1, "gcn"): {"look_back_hours": 1, "resolution": "10min"},
+    (4, "gcn"): {"look_back_hours": 4, "resolution": "10min"},
+    (8, "gcn"): {"look_back_hours": 4, "resolution": "10min"},
+    (1, "gcn_lstm"): {"look_back_hours": 2, "resolution": "10min"},
+    (4, "gcn_lstm"): {"look_back_hours": 4, "resolution": "30min"},
+    (8, "gcn_lstm"): {"look_back_hours": 4, "resolution": "60min"},
+    (1, "lstm"): {"look_back_hours": 12, "resolution": "20min"},
+    (4, "lstm"): {"look_back_hours": 1, "resolution": "20min"},
+    (8, "lstm"): {"look_back_hours": 4, "resolution": "60min"},
+    (1, "mlp"): {"look_back_hours": 1, "resolution": "10min"},
+    (4, "mlp"): {"look_back_hours": 3, "resolution": "10min"},
+    (8, "mlp"): {"look_back_hours": 3, "resolution": "10min"},
+}
+
+
 # Exact model architectures employed in the thesis
 MODEL_ARCHS = {
     "mlp": {
@@ -57,6 +74,6 @@ MODEL_ARCHS = {
         "use_residual": True,
         "num_hidden_lstm_layers": 1,
         "lstm_hidden_size": 256,
-        "num_hidden_dense_layers": 0
+        "num_hidden_dense_layers": 0,
     },
 }
