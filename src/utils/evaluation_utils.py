@@ -195,6 +195,41 @@ def get_temporal_analysis_results(forecasting_hours_to_run_id_mapping):
     df = pd.DataFrame(records)
     return df
 
+def get_spatial_analysis_results(forecasting_hours_to_run_id_mapping):
+    wandb.login()
+    api = wandb.Api()
+    general_config = load_general_config()
+    wandb_base_path = f"{general_config["wandb_entity"]}/{general_config["wandb_project"]}"
+
+    records = []
+    for forecasting_hours in forecasting_hours_to_run_id_mapping.keys():
+        run_names = [
+            f"{forecasting_hours}_hour_forecasting_run_{run_id}"
+            for run_id in forecasting_hours_to_run_id_mapping[forecasting_hours]
+        ]
+
+        runs = api.runs(path=wandb_base_path, filters={"display_name": {"$in": run_names}})
+        for run in runs:
+            forecasting_hours = run.name.split("_")[0]
+            run_id = run.name.split("_")[-1]
+            rmse = run.summary.get("best_model_val_rmse_original_domain")
+            model_architecture = run.config.get("model_architecture")
+            station_ids = run.config.get("station_ids")
+
+            records.append(
+                {
+                    "forecasting_hours": int(forecasting_hours),
+                    "run_id": run_id,
+                    "model_architecture": model_architecture,
+                    "station_ids": station_ids,
+                    "number_of_stations": len(station_ids),
+                    "RMSE": rmse,
+                }
+            )
+
+    df = pd.DataFrame(records)
+    return df
+
 
 def calculate_percentage_improvement(baseline_rmse, model_rmse):
     return (1 - model_rmse / baseline_rmse) * 100
