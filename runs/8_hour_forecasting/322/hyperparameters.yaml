@@ -11,7 +11,7 @@ heads: 2
 hidden_channels: 128
 knns: 0
 learning_rate: 1.0e-05
-look_back_hours: 3
+look_back_hours: 4
 lstm_hidden_size: 256
 max_epochs: 25
 model_architecture: mlp
@@ -25,6 +25,8 @@ station_features:
 - wind_direction_sin
 - wind_direction_cos
 - air_pressure
+- relative_humidity
+- dew_point
 - air_temperature
 station_ids:
 - '00342'

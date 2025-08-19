@@ -3,6 +3,7 @@ from models.models import PersistenceModel, MLP, WindLSTM, WindGCN, GCNLSTM, GAT
 from pathlib import Path
 import yaml
 import torch
+from torch_geometric.data import Batch as GraphBatch
 
 
 def load_general_config():
@@ -23,6 +24,22 @@ def load_hyperparameters(run_id=None, forecasting_hours=None):
         hyperparameters = yaml.safe_load(f)
 
     return hyperparameters
+
+
+def make_predictions(batch, model, device):
+    if isinstance(batch, GraphBatch):
+        batch.to(device)
+        predictions = model(batch)
+        y = batch.y
+    else:
+        x, y = batch
+
+        x = x.to(device)
+        y = y.to(device)
+
+        predictions = model(x)
+
+    return predictions, y
 
 
 def save_hyperparameters(hyperparameters, output_dir=None):
@@ -125,15 +142,18 @@ def load_best_model(run_id, forecasting_hours, device):
 
     model_dir = Path(f"runs/{forecasting_hours}_hour_forecasting/{run_id}")
     model = create_model(model_hyperparameters, forecasting_hours)
+    model.to(device)
     model.load_state_dict(torch.load(model_dir / "best_model.pt", map_location=device))
 
     return model
+
 
 def calculate_next_run_id(forecasting_hours):
     base_run_directory = get_base_run_dir(forecasting_hours)
     existing_run_ids = [int(run.name) for run in base_run_directory.iterdir() if run.name.isdigit()]
 
     return max(existing_run_ids) + 1 if existing_run_ids else 0
+
 
 def get_base_run_dir(forecasting_hours):
     return Path(f"runs/{forecasting_hours}_hour_forecasting")

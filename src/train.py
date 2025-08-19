@@ -16,6 +16,7 @@ from utils.model_utils import (
     create_model,
     load_general_config,
     load_hyperparameters,
+    make_predictions,
     save_hyperparameters,
     is_model_spatial,
     get_base_run_dir,
@@ -86,22 +87,6 @@ def evaluate_final_model(model, data_loader, device, use_global_scaling):
     return total_mse, total_mae
 
 
-def make_predictions(batch, model, device):
-    if isinstance(batch, GraphBatch):
-        batch.to(device)
-        predictions = model(batch)
-        y = batch.y
-    else:
-        x, y = batch
-
-        x = x.to(device)
-        y = y.to(device)
-
-        predictions = model(x)
-
-    return predictions, y
-
-
 def log_metrics(use_wandb, metrics, epoch):
     if use_wandb:
         wandb.log(metrics, step=epoch)
@@ -126,7 +111,7 @@ def save_model(model, run_directory, use_wandb, run_id):
         wandb.log_artifact(artifact)
 
 
-def perform_training_loop_spatial(
+def perform_training_loop(
     model, train_loader, optimizer, criterion, val_loader, general_config
 ):
     device = general_config["device"]
@@ -271,7 +256,7 @@ def execute_training_pipeline(general_config, hyperparameters):
         Optimizer = getattr(torch.optim, hyperparameters["optimizer"])
         optimizer = Optimizer(model.parameters(), lr=hyperparameters["learning_rate"])
 
-        best_model_state, best_epoch, stopped_epoch = perform_training_loop_spatial(
+        best_model_state, best_epoch, stopped_epoch = perform_training_loop(
             model,
             train_loader=train_loader,
             optimizer=optimizer,

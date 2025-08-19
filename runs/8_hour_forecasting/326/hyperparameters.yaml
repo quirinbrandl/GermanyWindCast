@@ -1,5 +1,5 @@
 batch_size: 128
-dense_hidden_size: 64
+dense_hidden_size: 32
 dropout_rate: 0.0
 early_stopping_patience: 5
 global_features:
@@ -11,11 +11,11 @@ heads: 2
 hidden_channels: 128
 knns: 0
 learning_rate: 1.0e-05
-look_back_hours: 3
+look_back_hours: 12
 lstm_hidden_size: 256
 max_epochs: 25
-model_architecture: mlp
-num_hidden_dense_layers: 2
+model_architecture: gcn_lstm
+num_hidden_dense_layers: 0
 num_hidden_gnn_layers: 2
 num_hidden_lstm_layers: 1
 optimizer: Adam
@@ -25,6 +25,8 @@ station_features:
 - wind_direction_sin
 - wind_direction_cos
 - air_pressure
+- relative_humidity
+- dew_point
 - air_temperature
 station_ids:
 - '00342'

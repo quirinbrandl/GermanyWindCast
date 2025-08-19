@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 from haversine import Unit, haversine_vector
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torch_geometric.data import Data as GraphData
 from torch_geometric.data import Dataset as GraphDataset
 from torch_geometric.loader import DataLoader as GraphDataLoader
@@ -337,6 +337,7 @@ def get_data_loaders(
     is_spatial=False,
     knns=None,
     weighting=None,
+    indices=None,
 ):
     DatasetType = WindDatasetSpatial if is_spatial else WindDataset
     DataLoaderType = GraphDataLoader if is_spatial else DataLoader
@@ -354,13 +355,14 @@ def get_data_loaders(
         ds_kwargs["knns"] = knns
         ds_kwargs["weighting"] = weighting
 
-    datasets = [
-        (
-            DatasetType(split=split, **ds_kwargs),
-            split == "train",
-        )
-        for split in splits
-    ]
+    datasets = []
+    for split in splits:
+        ds = DatasetType(split=split, **ds_kwargs)
+
+        if indices is not None:
+            split_indices = indices.get(split, indices) if isinstance(indices, dict) else indices
+            ds = Subset(ds, split_indices)
+        datasets.append((ds, split == "train"))
 
     return [
         DataLoaderType(

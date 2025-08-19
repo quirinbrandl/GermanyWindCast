@@ -31,5 +31,6 @@ if __name__ == "__main__":
     look_back_hours_to_test = [11]
     forecasting_hours_to_test = [1]
 
-    run_temporal_analysis(resolutions_to_test, look_back_hours_to_test, models_to_test, forecasting_hours_to_test)
-      
+    run_temporal_analysis(
+        resolutions_to_test, look_back_hours_to_test, models_to_test, forecasting_hours_to_test
+    )

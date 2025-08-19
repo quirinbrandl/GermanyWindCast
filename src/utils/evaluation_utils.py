@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from sklearn.metrics import root_mean_squared_error
 import joblib
 import wandb
 import numpy as np
@@ -8,21 +8,23 @@ import torch
 
 import utils.constants as c
 from data.datasets import get_data_loaders
-from utils.model_utils import load_best_model, load_hyperparameters, load_general_config
-from utils.data_utils import load_dataset
+from utils.model_utils import (
+    create_model,
+    is_model_spatial,
+    load_best_model,
+    load_hyperparameters,
+    load_general_config,
+    make_predictions,
+)
+from utils.data_utils import load_dataset, load_indices, load_metadata
+import openmeteo_requests
+
+import pandas as pd
+import requests_cache
+from retry_requests import retry
 
 
-def inverse_scale_numpy_array(wind_speeds):
-    scalers_dict = joblib.load(Path(f"data/processed/scalers.pkl"))
-    scaler = scalers_dict["wind_speed"]
-
-    inverse_scaled = np.zeros_like(wind_speeds)
-    inverse_scaled = scaler.inverse_transform(wind_speeds.reshape(-1, 1)).reshape(wind_speeds.shape)
-
-    return inverse_scaled
-
-
-def inverse_scale_batch_tensor(y_batch, use_global_scaler):
+def get_scaler(use_global_scaler):
     if use_global_scaler:
         file_name = "global_scalers.pkl"
         scaler_key = "wind_speed"
@@ -31,7 +33,11 @@ def inverse_scale_batch_tensor(y_batch, use_global_scaler):
         scaler_key = f"wind_speed_{c.REFERENCE_STATION_ID}"
 
     scalers_dict = joblib.load(Path(f"data/processed/{file_name}"))
-    scaler = scalers_dict[scaler_key]
+    return scalers_dict[scaler_key]
+
+
+def inverse_scale_batch_tensor(y_batch, use_global_scaler):
+    scaler = get_scaler(use_global_scaler)
 
     y_batch_np = (
         y_batch.detach().cpu().numpy()
@@ -44,65 +50,9 @@ def inverse_scale_batch_tensor(y_batch, use_global_scaler):
     return torch.tensor(inverse_scaled, device=device, dtype=y_batch.dtype)
 
 
-def add_ground_truth_to_df(df, ground_truth_resolutions, split):
-    df_copy = df.copy(deep=True)
-
-    for resolution in ground_truth_resolutions:
-        dataset_df = load_dataset(resolution, split)
-
-        ground_truth_scaled = dataset_df[f"wind_speed_{c.REFERENCE_STATION_ID}"]
-        ground_truth_unscaled = inverse_scale_numpy_array(ground_truth_scaled.values)
-
-        ground_truth_index = ground_truth_scaled.index
-        ground_truth = pd.Series(ground_truth_unscaled, index=ground_truth_index)
-
-        df_copy = df_copy.reindex(df_copy.index.union(ground_truth_index))
-        df_copy[f"ground_truth_{resolution}_resolution"] = ground_truth
-
-    return df_copy
-
-
-def get_inference_df(run_ids, forecasting_hours, ground_truth_resolutions=["1h"], split="eval"):
-    inference_df = add_ground_truth_to_df(pd.DataFrame(), ground_truth_resolutions, split)
-
-    for run_id in run_ids:
-        hyperparameters = load_hyperparameters(run_id, forecasting_hours)
-        look_back_hours = hyperparameters["look_back_hours"]
-
-        model = load_best_model(run_id, forecasting_hours, "cpu")
-
-        dataloader = get_data_loaders(
-            look_back_hours=look_back_hours,
-            resolution=hyperparameters["resolution"],
-            station_ids=hyperparameters["station_ids"],
-            station_features=hyperparameters["station_features"],
-            global_features=hyperparameters["global_features"],
-            forecasting_horizon_hours=forecasting_hours,
-            splits=["eval"],
-        )[0]
-
-        outs = []
-        with torch.no_grad():
-            for idx, (x_station, x_global, y) in enumerate(dataloader):
-                out = inverse_scale_batch_tensor(model(x_station, x_global)).cpu()
-                if idx % forecasting_hours == 0:
-                    outs.append(out)
-
-        if not outs:
-            final_preds = []
-        else:
-            stack = torch.cat(outs, dim=0)
-            final_preds = stack.view(-1).tolist()
-
-        predictions = final_preds
-        predictions_index = calculate_predictions_time_range(
-            split, hyperparameters["look_back_hours"]
-        )
-        prediction_series = pd.Series(predictions, index=predictions_index)
-
-        inference_df[f"run_{run_id}_predictions"] = prediction_series
-
-    return inference_df
+def inverse_scale_numpy_array(arr, use_global_scaler):
+    scaler = get_scaler(use_global_scaler)
+    return scaler.inverse_transform(arr.reshape(-1, 1)).reshape(arr.shape)
 
 
 def calculate_predictions_time_range(split, look_back_hours):
@@ -195,6 +145,7 @@ def get_temporal_analysis_results(forecasting_hours_to_run_id_mapping):
     df = pd.DataFrame(records)
     return df
 
+
 def get_spatial_analysis_results(forecasting_hours_to_run_id_mapping):
     wandb.login()
     api = wandb.Api()
@@ -233,3 +184,193 @@ def get_spatial_analysis_results(forecasting_hours_to_run_id_mapping):
 
 def calculate_percentage_improvement(baseline_rmse, model_rmse):
     return (1 - model_rmse / baseline_rmse) * 100
+
+
+def get_rmse_for_subset(
+    run_id, forecasting_hours, device, split, indices=None, batch_size=1, num_workers=1
+):
+    model = load_best_model(run_id, forecasting_hours, device)
+
+    hyperparameters = load_hyperparameters(run_id, forecasting_hours)
+    use_global_scaling = hyperparameters["use_global_scaling"]
+    test_data_loader = get_data_loaders(
+        look_back_hours=hyperparameters["look_back_hours"],
+        resolution=hyperparameters["resolution"],
+        station_ids=hyperparameters["station_ids"],
+        station_features=hyperparameters["station_features"],
+        global_features=hyperparameters["global_features"],
+        forecasting_horizon_hours=forecasting_hours,
+        splits=[split],
+        is_spatial=is_model_spatial(model),
+        weighting=hyperparameters.get("weighting"),
+        knns=hyperparameters.get("knns"),
+        use_global_scaling=use_global_scaling,
+        num_workers=num_workers,
+        batch_size=batch_size,
+        indices=indices,
+    )[0]
+
+    return run_evaluation_and_get_rmse(test_data_loader, model, device, use_global_scaling)
+
+
+def run_evaluation_and_get_rmse(data_loader, model, device, use_global_scaling):
+    mse = torch.nn.MSELoss()
+    mse_losses = []
+    with torch.no_grad():
+
+        for batch in data_loader:
+            predictions, y = make_predictions(batch, model, device)
+
+            y = inverse_scale_batch_tensor(y, use_global_scaling)
+            predictions = inverse_scale_batch_tensor(predictions, use_global_scaling)
+
+            mse_losses.append(mse(predictions, y).item())
+
+    total_mse = sum(mse_losses) / len(mse_losses)
+    return np.sqrt(total_mse)
+
+
+def get_persistence_rmse(forecasting_hours, split):
+    station_ids = [c.REFERENCE_STATION_ID]
+    station_features = [f"wind_speed"]
+    model_architecture = "persistence"
+    persistence_model = create_model(
+        {
+            "station_ids": station_ids,
+            "station_features": station_features,
+            "model_architecture": model_architecture,
+        },
+        forecasting_hours,
+    )
+
+    test_data_loader = get_data_loaders(
+        look_back_hours=1,
+        resolution="10min",
+        station_ids=[c.REFERENCE_STATION_ID],
+        station_features=station_features,
+        global_features=[],
+        forecasting_horizon_hours=forecasting_hours,
+        splits=[split],
+        is_spatial=False,
+        use_global_scaling=True,
+    )[0]
+
+    return run_evaluation_and_get_rmse(test_data_loader, persistence_model, "cpu", True)
+
+
+def get_icon_rmse(forecasting_hours, split, variant):
+    indices = load_indices(split)["valid_indices"]
+    processed_data = load_dataset(processed=True, is_global_scaled=True)
+    time_indices = processed_data.iloc[indices].index
+    processed_data["target"] = inverse_scale_numpy_array(
+        processed_data["target"].values, use_global_scaler=True
+    )
+
+    icon_forecast = get_icon_forecast(time_indices, variant).dropna()
+    targets = processed_data["target"]
+
+    predictions_arr = icon_forecast.iloc[:, :forecasting_hours].to_numpy()
+    observed_blocks = []
+    for h in range(forecasting_hours):
+        offset = pd.Timedelta("10min") + h * pd.Timedelta("60min")
+        observed = targets.reindex(icon_forecast.index + offset).to_numpy()
+        observed_blocks.append(observed.reshape(-1, 1))
+
+    observed_arr = np.hstack(observed_blocks)
+
+    rmse = root_mean_squared_error(observed_arr.ravel(), predictions_arr.ravel())
+    return rmse
+
+
+def get_icon_forecast(time_indices, variant):
+    start_date = time_indices[0]
+    end_date = time_indices[-1]
+    icon_data_path = Path(f"data/nwp/icon_{variant}.csv")
+
+    if not icon_data_path.exists() or not (
+        start_date
+        <= pd.read_csv(icon_data_path, parse_dates=True, index_col="datetime").index[0]
+        <= end_date
+    ):
+        metadata = load_metadata()
+        reference_location = metadata.loc[
+            c.REFERENCE_STATION_ID, ["geographic_latitude", "geographic_longitude"]
+        ]
+
+        cache_session = requests_cache.CachedSession(".cache", expire_after=3600)
+        retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+        openmeteo = openmeteo_requests.Client(session=retry_session)
+
+        url = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": reference_location["geographic_latitude"],
+            "longitude": reference_location["geographic_longitude"],
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+            "hourly": "wind_speed_10m",
+            "wind_speed_unit": "ms",
+            "models": f"icon_{variant}",
+        }
+        responses = openmeteo.weather_api(url, params=params)
+        response = responses[0]
+        hourly = response.Hourly()
+        hourly_wind_speed_10m = hourly.Variables(0).ValuesAsNumpy()
+
+        hourly_data = {
+            "datetime": pd.date_range(
+                start=pd.to_datetime(hourly.Time(), unit="s"),
+                end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
+                freq=pd.Timedelta(seconds=hourly.Interval()),
+                inclusive="left",
+            )
+        }
+
+        hourly_data["wind_speed"] = hourly_wind_speed_10m
+
+        hourly_df = pd.DataFrame(hourly_data)
+        hourly_df.set_index("datetime", inplace=True)
+
+        final_df = transform_icon_forecast(hourly_df, time_indices, variant)
+        final_df.to_csv(icon_data_path)
+
+    return pd.read_csv(icon_data_path, parse_dates=True, index_col="datetime")
+
+
+def transform_icon_forecast(icon_df, time_indices, variant):
+    icon_indices = time_indices[
+        (time_indices.minute == 0) & time_indices.hour.isin(get_icon_variant_run_hours(variant))
+    ]
+    cols = [f"{h}h" for h in range(1, 9)]
+    out = pd.DataFrame(index=icon_indices, columns=cols, dtype=float)
+    measured_data = load_dataset()
+
+    for t0 in icon_indices:
+        wind_speed_now = measured_data.at[t0, f"wind_speed_{c.REFERENCE_STATION_ID}"]
+        icon_next = icon_df.at[t0 + pd.Timedelta(hours=1), "wind_speed"]
+        out.at[t0, "1h"] = (wind_speed_now + icon_next) / 2.0
+
+        for h in range(2, 9):
+            first = icon_df.at[t0 + pd.Timedelta(hours=h - 1), "wind_speed"]
+            second = icon_df.at[t0 + pd.Timedelta(hours=h), "wind_speed"]
+            out.at[t0, f"{h}h"] = (first + second) / 2.0
+    return out
+
+
+def get_icon_indices(split, variant):
+    indices = load_indices(split)["valid_indices"]
+    processed_data = load_dataset(processed=True, is_global_scaled=True)
+
+    out = []
+    for counter, idx in enumerate(indices):
+        timestamp = processed_data.index[idx]
+        if (timestamp.minute == 0) and (timestamp.hour in get_icon_variant_run_hours(variant)):
+            out.append(counter)
+
+    return out
+
+
+def get_icon_variant_run_hours(variant):
+    if variant in ["d2", "eu"]:
+        return [3 * i for i in range(8)]
+    else:
+        return [6 * i for i in range(4)]
