@@ -1,6 +1,6 @@
-device: cuda
+device: cpu 
 forecasting_hours: 4
 num_workers: 4
-use_wandb: true
+use_wandb: true # Set to false to deactivate W&B tracking
 wandb_entity: brandlq-university-of-passau
 wandb_project: wind_forecasting
