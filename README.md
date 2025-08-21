@@ -55,7 +55,7 @@ GermanyWindCast/
 
 1. **Clone the repository**:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/quirinbrandl/GermanyWindCast
    cd GermanyWindCast
    ```
 
