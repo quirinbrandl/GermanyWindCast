@@ -13,4 +13,4 @@ authors = [
     {name = "Quirin Brandl"}
 ]
 
-dependencies = [#see requirements.txt]
+dependencies = [] #see requirements.txt
